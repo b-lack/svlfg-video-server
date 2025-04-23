@@ -242,11 +242,23 @@ MKCERT_CERT="$CERT_DIR/video.local+1.pem"
 MKCERT_KEY="$CERT_DIR/video.local+1-key.pem"
 
 # Install mkcert if not present
+# Install mkcert if not present
 if ! command -v mkcert >/dev/null 2>&1; then
   echo "mkcert not found. Installing mkcert..."
+
   sudo apt-get update
-  sudo apt-get install -y libnss3-tools wget
-  wget -O mkcert https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-linux-arm
+  sudo apt-get install -y libnss3-tools wget jq
+
+  # Get latest mkcert version and download URL for ARM
+  MKCERT_LATEST_JSON=$(wget -qO- https://api.github.com/repos/FiloSottile/mkcert/releases/latest)
+  MKCERT_URL=$(echo "$MKCERT_LATEST_JSON" | jq -r '.assets[] | select(.name | test("linux-arm$")) | .browser_download_url')
+
+  if [ -z "$MKCERT_URL" ]; then
+    echo "Could not find mkcert linux-arm binary in latest release. Please check https://github.com/FiloSottile/mkcert/releases"
+    exit 1
+  fi
+
+  wget -O mkcert "$MKCERT_URL"
   chmod +x mkcert
   sudo mv mkcert /usr/local/bin/
 fi
