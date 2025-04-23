@@ -230,6 +230,11 @@ else
     echo "SSL certificates generated successfully."
 fi
 
+# After generating certificates
+chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$CERT_DIR/key.pem" "$CERT_DIR/cert.pem"
+chmod 644 "$CERT_DIR/cert.pem"  # Everyone can read the certificate
+chmod 600 "$CERT_DIR/key.pem"   # Only owner can read the private key
+
 # --- Step 9: Completion ---
 echo ""
 echo "--- Setup Complete! ---"
