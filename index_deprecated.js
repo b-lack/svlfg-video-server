@@ -35,6 +35,7 @@ try {
 
 // Redirect HTTPS requests with wrong host to canonical host
 app.use((req, res, next) => {
+  // If the host is not the canonical one, redirect
   if (req.hostname !== canonicalHost) {
     const redirectUrl = `https://${canonicalHost}${req.originalUrl}`;
     return res.redirect(301, redirectUrl);
@@ -42,23 +43,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// Configure middleware
-app.use(cors());
-app.use(express.static('public'));
-
-// Catch-all SPA route - must come after static files
-app.get('*', (req, res) => {
-  res.sendFile('index.html', { root: 'public' });
-});
-
-// Set up Socket.io
+// Set up Socket.io on the HTTPS server if available, otherwise HTTP
 const io = new Server(httpsServer || httpServer, {
   cors: {
     origin: '*',
   }
 });
 
-// WebRTC signaling
+app.use(cors());
+app.use(express.static('public'));
+
+// Catch-all for SPA: serve index.html for any unknown route (after static)
+app.get('*', (req, res) => {
+  res.sendFile('index.html', { root: 'public' });
+});
+
 let broadcaster;
 
 io.on('connection', (socket) => {
