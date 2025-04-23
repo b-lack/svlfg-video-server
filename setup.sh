@@ -230,19 +230,42 @@ else
     echo "SSL certificates generated successfully."
 fi
 
-echo "[Step 8b] Generating HTTPS certificates with mkcert..."
-if ! command -v mkcert >/dev/null 2>&1; then
-  echo "mkcert not found. Please install mkcert manually."
-else
-  mkcert -install
-  mkcert -cert-file "$CERT_DIR/video.local.pem" -key-file "$CERT_DIR/video.local-key.pem" video.local $PI_STATIC_IP
-  echo "mkcert certificates generated."
-fi
-
 # After generating certificates
 chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$CERT_DIR/key.pem" "$CERT_DIR/cert.pem"
 chmod 644 "$CERT_DIR/cert.pem"  # Everyone can read the certificate
 chmod 600 "$CERT_DIR/key.pem"   # Only owner can read the private key
+
+echo "[Step 8b] Installing mkcert and generating HTTPS certificates..."
+
+CERT_DIR="certificates"
+MKCERT_CERT="$CERT_DIR/video.local+1.pem"
+MKCERT_KEY="$CERT_DIR/video.local+1-key.pem"
+
+# Install mkcert if not present
+if ! command -v mkcert >/dev/null 2>&1; then
+  echo "mkcert not found. Installing mkcert..."
+  sudo apt-get update
+  sudo apt-get install -y libnss3-tools wget
+  wget -O mkcert https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-linux-arm
+  chmod +x mkcert
+  sudo mv mkcert /usr/local/bin/
+fi
+
+# Install mkcert root CA if not already installed
+mkcert -install
+
+# Generate mkcert certificates if not present
+if [ ! -f "$MKCERT_CERT" ] || [ ! -f "$MKCERT_KEY" ]; then
+  echo "Generating mkcert certificates for video.local and $PI_STATIC_IP..."
+  mkcert -cert-file "$MKCERT_CERT" -key-file "$MKCERT_KEY" video.local $PI_STATIC_IP
+  echo "mkcert certificates generated."
+else
+  echo "mkcert certificates already exist. Skipping generation."
+fi
+
+chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$MKCERT_CERT" "$MKCERT_KEY"
+chmod 644 "$MKCERT_CERT"
+chmod 600 "$MKCERT_KEY"
 
 # --- Step 9: Completion ---
 echo ""
