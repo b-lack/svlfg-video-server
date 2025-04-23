@@ -1,9 +1,17 @@
 const express = require('express');
-const http = require('http');
+const https = require('https');
+const fs = require('fs');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const app = express();
-const server = http.createServer(app);
+
+// HTTPS options
+const options = {
+  key: fs.readFileSync('certificates/key.pem'),
+  cert: fs.readFileSync('certificates/cert.pem')
+};
+
+const server = https.createServer(options, app);
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -49,5 +57,5 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server is running on port ${PORT} and accessible on all network interfaces.`);
+  console.log(`HTTPS Server running on port ${PORT}`);
 });

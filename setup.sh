@@ -155,17 +155,26 @@ systemctl enable dnsmasq
 echo "[Step 4] dnsmasq service restarted and enabled."
 sleep 2 # Wait for service
 
-# --- Step 5: Configure iptables Rule ---
-echo "[Step 5] Configuring iptables redirect rule (Port 80 -> ${TARGET_PORT})..."
-IPTABLES_RULE_CHECK=(iptables -t nat -C PREROUTING -i "${PI_INTERFACE}" -p tcp --dport 80 -j REDIRECT --to-port "${TARGET_PORT}")
-IPTABLES_RULE_ADD=(iptables -t nat -A PREROUTING -i "${PI_INTERFACE}" -p tcp --dport 80 -j REDIRECT --to-port "${TARGET_PORT}")
+# --- Step 5: Configure iptables Rules ---
+echo "[Step 5] Configuring iptables redirect rules (Ports 80,443 -> ${TARGET_PORT})..."
 
-if ! "${IPTABLES_RULE_CHECK[@]}" >/dev/null 2>&1; then
-    echo "Adding iptables rule..."
-    "${IPTABLES_RULE_ADD[@]}"
-else
-    echo "iptables rule already exists."
-fi
+# Function to add an iptables rule for a specific port if it doesn't exist
+add_redirect_rule() {
+    local port=$1
+    local RULE_CHECK=(iptables -t nat -C PREROUTING -i "${PI_INTERFACE}" -p tcp --dport ${port} -j REDIRECT --to-port "${TARGET_PORT}")
+    local RULE_ADD=(iptables -t nat -A PREROUTING -i "${PI_INTERFACE}" -p tcp --dport ${port} -j REDIRECT --to-port "${TARGET_PORT}")
+    
+    if ! "${RULE_CHECK[@]}" >/dev/null 2>&1; then
+        echo "Adding iptables rule for port ${port}..."
+        "${RULE_ADD[@]}"
+    else
+        echo "iptables rule for port ${port} already exists."
+    fi
+}
+
+# Add rules for both HTTP (80) and HTTPS (443)
+add_redirect_rule 80
+add_redirect_rule 443
 
 # --- Step 6: Make iptables Rules Persistent ---
 echo "[Step 6] Saving iptables rules..."
@@ -207,7 +216,28 @@ EOF
 # Reload systemd to apply changes
 systemctl daemon-reload
 
-# --- Step 8: Completion ---
+# --- Step 8: Generate SSL certificates for HTTPS ---
+echo "[Step 8] Generating self-signed SSL certificates..."
+CERT_DIR="certificates"
+if [ ! -d "$CERT_DIR" ]; then
+    echo "Creating certificates directory..."
+    mkdir -p "$CERT_DIR"
+fi
+
+if [ -f "$CERT_DIR/key.pem" ] && [ -f "$CERT_DIR/cert.pem" ]; then
+    echo "SSL certificates already exist. Skipping generation."
+else
+    echo "Generating new self-signed certificates valid for 365 days..."
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$CERT_DIR/key.pem" \
+        -out "$CERT_DIR/cert.pem" \
+        -subj "/CN=Video Server/O=SVLFG/C=DE" \
+        -addext "subjectAltName = IP:${PI_STATIC_IP}"
+    chmod 600 "$CERT_DIR/key.pem" "$CERT_DIR/cert.pem"
+    echo "SSL certificates generated successfully."
+fi
+
+# --- Step 9: Completion ---
 echo ""
 echo "--- Setup Complete! ---"
 echo ""

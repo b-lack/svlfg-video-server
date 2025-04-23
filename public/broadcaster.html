@@ -12,45 +12,55 @@
     const video = document.getElementById('localVideo');
     let peerConnections = {};
 
-    // Get webcam stream
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      .then(stream => {
-        video.srcObject = stream;
-        socket.emit('broadcaster');
-        socket.on('watcher', id => {
-          const peerConnection = new RTCPeerConnection();
-          peerConnections[id] = peerConnection;
-          stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+    // Check if getUserMedia is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('Your browser does not support camera access over an insecure connection.\n\nPlease use HTTPS or a compatible browser.');
+      document.body.innerHTML += '<p class="error">This application requires secure context (HTTPS) to access camera and microphone. Please access this page via a secure URL.</p>';
+    } else {
 
-          peerConnection.onicecandidate = event => {
-            if (event.candidate) {
-              socket.emit('candidate', id, event.candidate);
+      // Get webcam stream
+      navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+        .then(stream => {
+          video.srcObject = stream;
+          socket.emit('broadcaster');
+          socket.on('watcher', id => {
+            const peerConnection = new RTCPeerConnection();
+            peerConnections[id] = peerConnection;
+            stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+
+            peerConnection.onicecandidate = event => {
+              if (event.candidate) {
+                socket.emit('candidate', id, event.candidate);
+              }
+            };
+
+            peerConnection.createOffer()
+              .then(sdp => peerConnection.setLocalDescription(sdp))
+              .then(() => {
+                socket.emit('offer', id, peerConnection.localDescription);
+              });
+          });
+
+          socket.on('answer', (id, description) => {
+            peerConnections[id].setRemoteDescription(description);
+          });
+
+          socket.on('candidate', (id, candidate) => {
+            peerConnections[id].addIceCandidate(new RTCIceCandidate(candidate));
+          });
+
+          socket.on('disconnectPeer', id => {
+            if (peerConnections[id]) {
+              peerConnections[id].close();
+              delete peerConnections[id];
             }
-          };
-
-          peerConnection.createOffer()
-            .then(sdp => peerConnection.setLocalDescription(sdp))
-            .then(() => {
-              socket.emit('offer', id, peerConnection.localDescription);
-            });
+          });
+        })
+        .catch(error => {
+          console.error('Error accessing media devices:', error);
+          alert('Error accessing camera: ' + error.message);
         });
-
-        socket.on('answer', (id, description) => {
-          peerConnections[id].setRemoteDescription(description);
-        });
-
-        socket.on('candidate', (id, candidate) => {
-          peerConnections[id].addIceCandidate(new RTCIceCandidate(candidate));
-        });
-
-        socket.on('disconnectPeer', id => {
-          if (peerConnections[id]) {
-            peerConnections[id].close();
-            delete peerConnections[id];
-          }
-        });
-      })
-      .catch(console.error);
+      }
   </script>
 </body>
 </html>
