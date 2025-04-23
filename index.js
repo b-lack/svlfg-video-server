@@ -54,10 +54,6 @@ app.use(cors());
 app.use(express.static('public'));
 
 // Catch-all for SPA: serve index.html for any unknown route (after static)
-app.use((req, res, next) => {
-  res.sendFile('index.html', { root: 'public' });
-});
-
 app.get('*', (req, res) => {
   res.sendFile('index.html', { root: 'public' });
 });
