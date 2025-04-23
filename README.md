@@ -4,15 +4,22 @@ SVLFG Video Server creates a self-contained Wi-Fi hotspot on a Raspberry Pi that
 ## Requirements
 - [Node.js](https://nodejs.org/en/download/) (v22.x.x)
 
-## Install
+## Setup
 
 ```bash
 git clone https://github.com/b-lack/svlfg-video-server.git
 cd svlfg-video-server
+cp .env.example .env
+````
+
+## Install dependencies
+
+```bash
 npm install
 npm install pm2 -g
 pm2 save
 pm2 startup # run the output command
+
 ```
 
 ## Create self-signed certificate

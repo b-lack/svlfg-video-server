@@ -1,18 +1,30 @@
 const express = require('express');
+const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const app = express();
 
-// HTTPS options
-const options = {
-  key: fs.readFileSync('certificates/key.pem'),
-  cert: fs.readFileSync('certificates/cert.pem')
-};
+// Use both HTTP and HTTPS
+const httpServer = http.createServer(app);
 
-const server = https.createServer(options, app);
-const io = new Server(server, {
+// HTTPS options - with error handling for certificates
+let httpsServer;
+try {
+  const options = {
+    key: fs.readFileSync('certificates/key.pem'),
+    cert: fs.readFileSync('certificates/cert.pem')
+  };
+  httpsServer = https.createServer(options, app);
+} catch (err) {
+  console.error('Error loading certificates:', err);
+  console.log('Falling back to HTTP only');
+  httpsServer = null;
+}
+
+// Set up Socket.io on the HTTPS server if available, otherwise HTTP
+const io = new Server(httpsServer || httpServer, {
   cors: {
     origin: '*',
   }
@@ -55,7 +67,15 @@ io.on('connection', (socket) => {
   });
 });
 
+// Start both servers
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`HTTPS Server running on port ${PORT}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`HTTP Server running on port ${PORT}`);
 });
+
+if (httpsServer) {
+  const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+  httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+    console.log(`HTTPS Server running on port ${HTTPS_PORT}`);
+  });
+}

@@ -159,22 +159,15 @@ sleep 2 # Wait for service
 echo "[Step 5] Configuring iptables redirect rules (Ports 80,443 -> ${TARGET_PORT})..."
 
 # Function to add an iptables rule for a specific port if it doesn't exist
-add_redirect_rule() {
-    local port=$1
-    local RULE_CHECK=(iptables -t nat -C PREROUTING -i "${PI_INTERFACE}" -p tcp --dport ${port} -j REDIRECT --to-port "${TARGET_PORT}")
-    local RULE_ADD=(iptables -t nat -A PREROUTING -i "${PI_INTERFACE}" -p tcp --dport ${port} -j REDIRECT --to-port "${TARGET_PORT}")
-    
-    if ! "${RULE_CHECK[@]}" >/dev/null 2>&1; then
-        echo "Adding iptables rule for port ${port}..."
-        "${RULE_ADD[@]}"
-    else
-        echo "iptables rule for port ${port} already exists."
-    fi
-}
+echo "Adding iptables rule for HTTP (port 80) → port 3000..."
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port 3000
+
+echo "Adding iptables rule for HTTPS (port 443) → port 3443..."
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
 
 # Add rules for both HTTP (80) and HTTPS (443)
-add_redirect_rule 80
-add_redirect_rule 443
+#add_redirect_rule 80
+#add_redirect_rule 443
 
 # --- Step 6: Make iptables Rules Persistent ---
 echo "[Step 6] Saving iptables rules..."
@@ -247,7 +240,7 @@ echo "* dnsmasq installed and configured to resolve all DNS to ${PI_STATIC_IP}."
 if [ "$ENABLE_DHCP" = "true" ]; then
     echo "* dnsmasq DHCP server enabled for range ${DHCP_RANGE_START}-${DHCP_RANGE_END}."
 fi
-echo "* iptables rule added to redirect incoming traffic on ${PI_INTERFACE}:80 to localhost:${TARGET_PORT}."
+echo "* iptables rules added to redirect HTTP traffic (port 80) to port 3000 and HTTPS traffic (port 443) to port 3443."
 echo "* iptables rules should be persistent across reboots."
 echo "* Added fixes for dnsmasq startup timing issues (NetworkManager dispatcher + service delay)."
 echo ""
