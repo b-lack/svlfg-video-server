@@ -6,6 +6,21 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const app = express();
 
+// Redirect all requests not using the canonical domain to the canonical domain
+app.use((req, res, next) => {
+  const canonicalHost = 'pi1.gruenecho.de';
+  // Check if the request is already for the canonical domain and using HTTPS
+  if (
+    req.hostname !== canonicalHost ||
+    req.protocol !== 'https'
+  ) {
+    // Build the redirect URL
+    const redirectUrl = `https://${canonicalHost}${req.originalUrl}`;
+    return res.redirect(301, redirectUrl);
+  }
+  next();
+});
+
 // Use both HTTP and HTTPS
 const httpServer = http.createServer(app);
 
