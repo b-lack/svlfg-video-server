@@ -46,8 +46,14 @@ app.use((req, res, next) => {
 app.use(cors());
 app.use(express.static('public'));
 
-// Catch-all SPA route - must come after static files
-app.get('*', (req, res) => {
+// After all other middleware and routes
+app.use((req, res) => {
+  // For API routes, you might want to return a 404 JSON response
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  
+  // For all other routes, serve the SPA's index.html
   res.sendFile('index.html', { root: 'public' });
 });
 
