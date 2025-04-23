@@ -13,8 +13,8 @@ const httpServer = http.createServer(app);
 let httpsServer;
 try {
   const options = {
-    key: fs.readFileSync('certificates/key.pem'),
-    cert: fs.readFileSync('certificates/cert.pem')
+    key: fs.readFileSync('./certificates/video.local+1-key.pem'),
+    cert: fs.readFileSync('./certificates/video.local+1.pem')
   };
   httpsServer = https.createServer(options, app);
 } catch (err) {

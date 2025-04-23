@@ -230,6 +230,15 @@ else
     echo "SSL certificates generated successfully."
 fi
 
+echo "[Step 8b] Generating HTTPS certificates with mkcert..."
+if ! command -v mkcert >/dev/null 2>&1; then
+  echo "mkcert not found. Please install mkcert manually."
+else
+  mkcert -install
+  mkcert -cert-file "$CERT_DIR/video.local.pem" -key-file "$CERT_DIR/video.local-key.pem" video.local $PI_STATIC_IP
+  echo "mkcert certificates generated."
+fi
+
 # After generating certificates
 chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$CERT_DIR/key.pem" "$CERT_DIR/cert.pem"
 chmod 644 "$CERT_DIR/cert.pem"  # Everyone can read the certificate
