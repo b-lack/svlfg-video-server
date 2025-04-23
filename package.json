@@ -5,7 +5,7 @@
   "scripts": {
     "start": "pm2 start npm --name \"video-server\" -- run start",
     "stop": "pm2 stop video-server",
-    "pm2:restart": " && npm run stop && npm run pm2:delete && npm run start",
+    "pm2:restart": "npm run stop && npm run pm2:delete && npm run start",
     "pm2:delete": "pm2 delete video-server",
     "pm2:list": "pm2 list",
     "pm2:logs": "pm2 logs video-server"
