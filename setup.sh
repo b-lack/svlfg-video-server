@@ -104,7 +104,7 @@ interface=${PI_INTERFACE}
 # Bind to only specified interface
 bind-interfaces
 # Resolve all domains to this Pi
-address=/#/${PI_STATIC_IP}
+address=/#/${PI_STATIC_IP} # <--- This line is already here
 # Standard options
 domain-needed
 bogus-priv
@@ -172,7 +172,42 @@ echo "[Step 6] Saving iptables rules..."
 # The package installation should have prompted for saving, but save again just in case.
 netfilter-persistent save
 
-# --- Step 7: Completion ---
+# --- Step 7: Fix dnsmasq Startup Timing Issues ---
+echo "[Step 7] Fixing dnsmasq startup timing issues..."
+
+# Create NetworkManager dispatcher script to restart dnsmasq when wlan1 comes up
+echo "Creating NetworkManager dispatcher script..."
+mkdir -p /etc/NetworkManager/dispatcher.d/
+cat << EOF > /etc/NetworkManager/dispatcher.d/99-restart-dnsmasq
+#!/bin/bash
+INTERFACE=\$1
+STATUS=\$2
+
+# Only restart dnsmasq when wlan1 comes up
+if [ "\$INTERFACE" = "${PI_INTERFACE}" ] && [ "\$STATUS" = "up" ]; then
+    systemctl restart dnsmasq
+fi
+EOF
+
+# Make the script executable
+chmod +x /etc/NetworkManager/dispatcher.d/99-restart-dnsmasq
+
+# Also modify dnsmasq.service to wait for network
+echo "Modifying dnsmasq service to wait for network..."
+mkdir -p /etc/systemd/system/dnsmasq.service.d/
+cat << EOF > /etc/systemd/system/dnsmasq.service.d/override.conf
+[Unit]
+Wants=network-online.target
+After=network-online.target NetworkManager.service
+
+[Service]
+ExecStartPre=/bin/sleep 10
+EOF
+
+# Reload systemd to apply changes
+systemctl daemon-reload
+
+# --- Step 8: Completion ---
 echo ""
 echo "--- Setup Complete! ---"
 echo ""
@@ -184,13 +219,14 @@ if [ "$ENABLE_DHCP" = "true" ]; then
 fi
 echo "* iptables rule added to redirect incoming traffic on ${PI_INTERFACE}:80 to localhost:${TARGET_PORT}."
 echo "* iptables rules should be persistent across reboots."
+echo "* Added fixes for dnsmasq startup timing issues (NetworkManager dispatcher + service delay)."
 echo ""
 echo "Next Steps:"
 echo "1.  Ensure your web application is running on the Pi and listening on port ${TARGET_PORT}."
 echo "2.  Connect client devices to the ${PI_INTERFACE} network."
 echo "3.  Clients should get DNS/IP automatically (if DHCP enabled) or configure them manually to use ${PI_STATIC_IP} as DNS."
 echo "4.  Test DNS resolution and HTTP access (e.g., http://example.com) from a client device."
-echo "5.  A reboot (sudo reboot) is sometimes recommended after significant network changes."
+echo "5.  A reboot (sudo reboot) is recommended to verify all changes work properly."
 echo ""
 
 exit 0
