@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "pm2 start npm --name \"video-server\" -- run start",
-    "stop": "pm2 stop video-server",
-    "pm2:restart": "npm run stop && npm run pm2:delete && npm run start",
+    "start": "node index.js",
+    "pm2:start": "pm2 start npm --name \"video-server\" -- run start",
+    "pm2:stop": "pm2 stop video-server",
+    "pm2:restart": "pm2 restart video-server",
     "pm2:delete": "pm2 delete video-server",
     "pm2:list": "pm2 list",
     "pm2:logs": "pm2 logs video-server"
