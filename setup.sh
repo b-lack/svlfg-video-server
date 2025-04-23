@@ -235,49 +235,11 @@ chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$CERT_DIR/key.pem" "$CERT_DIR
 chmod 644 "$CERT_DIR/cert.pem"  # Everyone can read the certificate
 chmod 600 "$CERT_DIR/key.pem"   # Only owner can read the private key
 
-echo "[Step 8b] Installing mkcert and generating HTTPS certificates..."
+# After generating certificates
+chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$CERT_DIR/privkey.pem" "$CERT_DIR/fullchain.pem"
+chmod 644 "$CERT_DIR/fullchain.pem"  # Everyone can read the certificate
+chmod 600 "$CERT_DIR/privkey.pem"   # Only owner can read the private key
 
-CERT_DIR="certificates"
-MKCERT_CERT="$CERT_DIR/video.local+1.pem"
-MKCERT_KEY="$CERT_DIR/video.local+1-key.pem"
-
-# Install mkcert if not present
-# Install mkcert if not present
-if ! command -v mkcert >/dev/null 2>&1; then
-  echo "mkcert not found. Installing mkcert..."
-
-  sudo apt-get update
-  sudo apt-get install -y libnss3-tools wget jq
-
-  # Get latest mkcert version and download URL for ARM
-  MKCERT_LATEST_JSON=$(wget -qO- https://api.github.com/repos/FiloSottile/mkcert/releases/latest)
-  MKCERT_URL=$(echo "$MKCERT_LATEST_JSON" | jq -r '.assets[] | select(.name | test("linux-arm$")) | .browser_download_url')
-
-  if [ -z "$MKCERT_URL" ]; then
-    echo "Could not find mkcert linux-arm binary in latest release. Please check https://github.com/FiloSottile/mkcert/releases"
-    exit 1
-  fi
-
-  wget -O mkcert "$MKCERT_URL"
-  chmod +x mkcert
-  sudo mv mkcert /usr/local/bin/
-fi
-
-# Install mkcert root CA if not already installed
-mkcert -install
-
-# Generate mkcert certificates if not present
-if [ ! -f "$MKCERT_CERT" ] || [ ! -f "$MKCERT_KEY" ]; then
-  echo "Generating mkcert certificates for video.local and $PI_STATIC_IP..."
-  mkcert -cert-file "$MKCERT_CERT" -key-file "$MKCERT_KEY" video.local $PI_STATIC_IP
-  echo "mkcert certificates generated."
-else
-  echo "mkcert certificates already exist. Skipping generation."
-fi
-
-chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$MKCERT_CERT" "$MKCERT_KEY"
-chmod 644 "$MKCERT_CERT"
-chmod 600 "$MKCERT_KEY"
 
 # --- Step 9: Completion ---
 echo ""
