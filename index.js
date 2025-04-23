@@ -6,10 +6,11 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const app = express();
 
+const canonicalHost = 'pi1.gruenecho.de';
+
 // Create a separate Express app for HTTP to HTTPS redirection
 const redirectApp = express();
 redirectApp.use((req, res) => {
-  const canonicalHost = 'pi1.gruenecho.de';
   // Always redirect to HTTPS canonical domain
   const redirectUrl = `https://${canonicalHost}${req.originalUrl}`;
   res.redirect(301, redirectUrl);
@@ -33,7 +34,6 @@ try {
 }
 
 // Redirect HTTPS requests with wrong host to canonical host
-const canonicalHost = 'pi1.gruenecho.de';
 app.use((req, res, next) => {
   // If the host is not the canonical one, redirect
   if (req.hostname !== canonicalHost) {
