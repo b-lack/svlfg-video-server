@@ -6,25 +6,19 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const app = express();
 
-// Redirect all requests not using the canonical domain to the canonical domain
-app.use((req, res, next) => {
+// Create a separate Express app for HTTP to HTTPS redirection
+const redirectApp = express();
+redirectApp.use((req, res) => {
   const canonicalHost = 'pi1.gruenecho.de';
-  // Check if the request is already for the canonical domain and using HTTPS
-  if (
-    req.hostname !== canonicalHost ||
-    req.protocol !== 'https'
-  ) {
-    // Build the redirect URL
-    const redirectUrl = `https://${canonicalHost}${req.originalUrl}`;
-    return res.redirect(301, redirectUrl);
-  }
-  next();
+  // Always redirect to HTTPS canonical domain
+  const redirectUrl = `https://${canonicalHost}${req.originalUrl}`;
+  res.redirect(301, redirectUrl);
 });
 
-// Use both HTTP and HTTPS
-const httpServer = http.createServer(app);
+// HTTP server ONLY for redirecting to HTTPS
+const httpServer = http.createServer(redirectApp);
 
-// HTTPS options - with error handling for certificates
+// Main app runs only on HTTPS
 let httpsServer;
 try {
   const options = {
@@ -37,6 +31,17 @@ try {
   console.log('Falling back to HTTP only');
   httpsServer = null;
 }
+
+// Redirect HTTPS requests with wrong host to canonical host
+const canonicalHost = 'pi1.gruenecho.de';
+app.use((req, res, next) => {
+  // If the host is not the canonical one, redirect
+  if (req.hostname !== canonicalHost) {
+    const redirectUrl = `https://${canonicalHost}${req.originalUrl}`;
+    return res.redirect(301, redirectUrl);
+  }
+  next();
+});
 
 // Set up Socket.io on the HTTPS server if available, otherwise HTTP
 const io = new Server(httpsServer || httpServer, {
@@ -82,12 +87,13 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start both servers
+// Start HTTP redirect server
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`HTTP Server running on port ${PORT}`);
+  console.log(`HTTP redirect server running on port ${PORT}`);
 });
 
+// Start HTTPS server
 if (httpsServer) {
   const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
   httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
