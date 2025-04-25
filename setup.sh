@@ -101,9 +101,10 @@ cat << EOF > /tmp/hostapd.conf
 interface=${PI_INTERFACE}
 driver=nl80211
 ssid=${NEW_SSID}
-hw_mode=g
-# Channel 6 often has better device compatibility
-channel=6
+# Use more compatible b/g mixed mode
+hw_mode=b
+# Try channel 1 which often has better compatibility
+channel=1
 macaddr_acl=0
 auth_algs=1
 # Make sure SSID is broadcast (0=broadcast, 1=hidden)
@@ -111,36 +112,44 @@ ignore_broadcast_ssid=0
 
 # Basic settings for open network
 wpa=0
-ap_isolate=0
 
-# Required Android compatibility settings
+# Simplified Android compatibility settings
 wmm_enabled=1
-ieee80211n=1
+# Disable 802.11n which can cause problems on some devices
+ieee80211n=0
 beacon_int=100
-dtim_period=1
+dtim_period=2
 
-# Boost signal parameters
+# Basic country settings
 country_code=DE
 ieee80211d=1
-max_num_sta=255
-tx_queue_data2_burst=2147483647
-tx_queue_data3_burst=2147483647
 
-# Performance settings
-ht_capab=[HT40][SHORT-GI-20][DSSS_CCK-40]
-require_ht=0
+# Remove potentially problematic advanced parameters
 EOF
+
+echo "Using basic and compatible hostapd configuration for maximum device compatibility"
+
+# Debug information
+echo "Checking WiFi interface capabilities..."
+iw list || echo "iw command not available or interface not detected properly"
+
+# Turn on WiFi regulatory domain to be safe
+iw reg set DE 2>/dev/null || echo "Could not set regulatory domain"
+
+# Ensure hostapd has debug logging enabled
+echo "Starting hostapd with verbose logging..."
+hostapd -dd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1
+sleep 3
+
+# Show information from hostapd log
+echo "Latest hostapd log entries:"
+tail -n 20 /tmp/hostapd.log || echo "No hostapd log available"
 
 # Configure the interface with static IP
 echo "Setting static IP on ${PI_INTERFACE}..."
 ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
 ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
 ip link set ${PI_INTERFACE} up
-
-# Start hostapd
-echo "Starting hostapd..."
-hostapd -B /tmp/hostapd.conf
-sleep 2
 
 NM_CON_NAME="hostapd-${PI_INTERFACE}"
 echo "[Step 1] WiFi hotspot '${NEW_SSID}' created successfully."
