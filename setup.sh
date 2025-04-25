@@ -73,55 +73,70 @@ HOTSPOT_CON_NAME="Hotspot-${PI_INTERFACE}"
 echo "Removing any existing connection '${HOTSPOT_CON_NAME}'..."
 nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true
 
-# Create a very basic connection first, then modify it
-echo "Creating basic AP connection..."
-nmcli con add \
-    con-name "${HOTSPOT_CON_NAME}" \
-    ifname "${PI_INTERFACE}" \
-    type wifi \
-    mode ap \
-    ssid "${NEW_SSID}" \
-    ipv4.method shared \
-    ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}"
+# Try an alternative approach - install and use create_ap
+echo "Installing create_ap utility..."
+apt-get update
+apt-get install -y git util-linux procps hostapd iproute2 iw haveged dnsmasq
 
-# Explicitly disable all security - very important for Raspberry Pi
-echo "Setting connection to open (no security)..."
-nmcli con modify "${HOTSPOT_CON_NAME}" \
-    wifi-sec.key-mgmt "none" \
-    wifi-sec.psk "" \
-    802-11-wireless-security.key-mgmt "none" \
-    802-11-wireless-security.proto "" \
-    802-11-wireless-security.pairwise "" \
-    802-11-wireless-security.group "" \
-    802-11-wireless-security.wep-key0 "" \
-    802-11-wireless-security.wep-key-type "1"
+# Check if create_ap is already installed
+if [ ! -d "/tmp/create_ap" ]; then
+    echo "Cloning create_ap repository..."
+    git clone https://github.com/oblique/create_ap /tmp/create_ap
+    cd /tmp/create_ap
+    make install
+    cd -
+else
+    echo "create_ap already cloned, proceeding with installation..."
+    cd /tmp/create_ap
+    make install
+    cd -
+fi
 
-echo "Setting connection to autoconnect and AP band..."
-nmcli con modify "${HOTSPOT_CON_NAME}" \
-    connection.autoconnect yes \
-    802-11-wireless.band bg
+# Kill any existing create_ap instances
+echo "Stopping any existing WiFi hotspots..."
+killall create_ap 2>/dev/null || true
+sleep 1
 
-# Show connection details for debugging
-echo "Connection details before activation:"
-nmcli -s connection show "${HOTSPOT_CON_NAME}" | grep -E 'security|key-mgmt|wep'
+# Create an open WiFi hotspot
+echo "Creating open WiFi hotspot using create_ap..."
+create_ap --no-virt -n "${PI_INTERFACE}" "${NEW_SSID}" &
+HOTSPOT_PID=$!
+sleep 5
 
-# Activate the connection
-echo "Activating connection..."
-nmcli connection up "${HOTSPOT_CON_NAME}" || {
-    echo "Error creating open hotspot."
-    echo "Debug info:"
-    nmcli -f ALL dev wifi
-    nmcli -f ALL connection show "${HOTSPOT_CON_NAME}"
-    exit 1
-}
+# Check if the hotspot started successfully
+if kill -0 $HOTSPOT_PID 2>/dev/null; then
+    echo "Hotspot started successfully with PID $HOTSPOT_PID"
+    NM_CON_NAME="create_ap-${PI_INTERFACE}"
+else
+    echo "Error: Failed to start the WiFi hotspot."
+    echo "Trying alternative method with hostapd directly..."
+    
+    # Create a simple hostapd configuration
+    cat << EOF > /tmp/hostapd.conf
+interface=${PI_INTERFACE}
+driver=nl80211
+ssid=${NEW_SSID}
+hw_mode=g
+channel=7
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+EOF
 
-# Set the connection name for later use
-NM_CON_NAME="${HOTSPOT_CON_NAME}"
-echo "[Step 1] Created and activated open hotspot connection '${NM_CON_NAME}'"
+    # Configure the interface with static IP
+    ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
+    ip link set ${PI_INTERFACE} up
+    
+    # Start hostapd
+    hostapd -B /tmp/hostapd.conf
+    sleep 2
+    
+    NM_CON_NAME="hostapd-${PI_INTERFACE}"
+    echo "Hotspot created using hostapd directly."
+fi
 
-# Don't modify security settings again since we already did that above
-
-echo "[Step 1] NetworkManager hotspot '${NM_CON_NAME}' created and activated successfully."
+echo "[Step 1] WiFi hotspot '${NEW_SSID}' created successfully."
 sleep 3 # Wait for network to potentially stabilize
 
 # --- Step 2: Install Required Packages ---
