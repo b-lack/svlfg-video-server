@@ -78,39 +78,64 @@ echo "Installing required packages..."
 apt-get update
 apt-get install -y hostapd dnsmasq iptables-persistent
 
-# Stop and disable any conflicting services
+# Stop any conflicting services
 echo "Stopping any existing WiFi services..."
-systemctl stop hostapd 2>/dev/null || true
-systemctl stop wpa_supplicant 2>/dev/null || true 
-killall hostapd 2>/dev/null || true
-killall wpa_supplicant 2>/dev/null || true
+    echo "Cloning create_ap repository..."
+    git clone https://github.com/oblique/create_ap /tmp/create_ap
+    cd /tmp/create_ap
+    make install
+    cd -
+else
+    echo "create_ap already cloned, proceeding with installation..."
+    cd /tmp/create_ap
+    make install
+    cd -
+fi
+
+# Kill any existing create_ap instances
+echo "Stopping any existing WiFi hotspots..."
+killall create_ap 2>/dev/null || true
 sleep 1
 
-# Create a simple hostapd configuration
-echo "Creating hostapd configuration..."
-cat << EOF > /tmp/hostapd.conf
+# Create an open WiFi hotspot
+echo "Creating open WiFi hotspot using create_ap..."
+create_ap --no-virt -n "${PI_INTERFACE}" "${NEW_SSID}" &
+HOTSPOT_PID=$!
+sleep 5
+
+# Check if the hotspot started successfully
+if kill -0 $HOTSPOT_PID 2>/dev/null; then
+    echo "Hotspot started successfully with PID $HOTSPOT_PID"
+    NM_CON_NAME="create_ap-${PI_INTERFACE}"
+else
+    echo "Error: Failed to start the WiFi hotspot."
+    echo "Trying alternative method with hostapd directly..."
+    
+    # Create a simple hostapd configuration
+    cat << EOF > /tmp/hostapd.conf
 interface=${PI_INTERFACE}
 driver=nl80211
 ssid=${NEW_SSID}
 hw_mode=g
 channel=7
+wmm_enabled=0
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
 EOF
 
-# Configure the interface with static IP
-echo "Setting static IP on ${PI_INTERFACE}..."
-ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
-ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
-ip link set ${PI_INTERFACE} up
+    # Configure the interface with static IP
+    ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
+    ip link set ${PI_INTERFACE} up
+    
+    # Start hostapd
+    hostapd -B /tmp/hostapd.conf
+    sleep 2
+    
+    NM_CON_NAME="hostapd-${PI_INTERFACE}"
+    echo "Hotspot created using hostapd directly."
+fi
 
-# Start hostapd
-echo "Starting hostapd..."
-hostapd -B /tmp/hostapd.conf
-sleep 2
-
-NM_CON_NAME="hostapd-${PI_INTERFACE}"
 echo "[Step 1] WiFi hotspot '${NEW_SSID}' created successfully."
 sleep 3 # Wait for network to potentially stabilize
 
