@@ -101,7 +101,13 @@ ignore_broadcast_ssid=0
 wmm_enabled=1
 ieee80211n=1
 wpa=0
-ap_isolate=0
+# Parameters to improve Android compatibility
+beacon_int=100
+dtim_period=2
+# Make sure network is visible
+country_code=DE
+ieee80211d=1
+max_num_sta=255
 EOF
 
 # Configure the interface with static IP
