@@ -63,8 +63,8 @@ nmcli device disconnect "${PI_INTERFACE}" || echo "Device ${PI_INTERFACE} was no
 sleep 2
 
 # Define the desired SSID and Password
-NEW_SSID="SVLFG - Broadcast"
-NEW_PASSWORD="svlfg123" # Set your desired password here
+NEW_SSID="SVLFG"
+
 echo "[Step 1] Creating OPEN Wi-Fi hotspot with SSID '${NEW_SSID}' on device ${PI_INTERFACE}..."
 
 # Use the dedicated hotspot command with the desired password.
@@ -193,10 +193,10 @@ echo "[Step 5] Configuring iptables redirect rules (Ports 80,443 -> ${TARGET_POR
 
 # Function to add an iptables rule for a specific port if it doesn't exist
 echo "Adding iptables rule for HTTP (port 80) → port 3000..."
-iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port 3000
+#iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port 3000
 
 echo "Adding iptables rule for HTTPS (port 443) → port 3443..."
-iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
+#iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
 
 # Add rules for both HTTP (80) and HTTPS (443)
 #add_redirect_rule 80
