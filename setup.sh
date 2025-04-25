@@ -68,23 +68,29 @@ NEW_SSID="SVLFG"
 
 echo "[Step 1] Creating OPEN Wi-Fi hotspot with SSID '${NEW_SSID}' on device ${PI_INTERFACE}..."
 
-# Create open hotspot (no password)
-nmcli device wifi hotspot ifname "${PI_INTERFACE}" ssid "${NEW_SSID}" band bg || { echo "Error creating open hotspot."; exit 1; }
-sleep 5 # Give NM time to create and activate the profile
+# Create the connection profile for an open hotspot (explicitly setting security to none)
+HOTSPOT_CON_NAME="Hotspot-${PI_INTERFACE}"
+nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true  # Remove if exists
+nmcli connection add \
+    type wifi \
+    ifname "${PI_INTERFACE}" \
+    con-name "${HOTSPOT_CON_NAME}" \
+    autoconnect yes \
+    wifi.ssid "${NEW_SSID}" \
+    wifi.mode ap \
+    ipv4.method shared \
+    ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}" \
+    802-11-wireless.band bg
 
-# Dynamically find the connection name associated with the active hotspot on the interface
-echo "[Step 1] Finding the active connection profile name for ${PI_INTERFACE}..."
-ACTIVE_CON_UUID=$(nmcli -g GENERAL.CONNECTION device show "${PI_INTERFACE}")
-if [ -z "$ACTIVE_CON_UUID" ]; then
-    echo "Error: Could not find an active connection UUID for ${PI_INTERFACE} after creating hotspot."
-    exit 1
-fi
-NM_CON_NAME=$(nmcli -g connection.id connection show "${ACTIVE_CON_UUID}")
-if [ -z "$NM_CON_NAME" ]; then
-    echo "Error: Could not find connection name for UUID ${ACTIVE_CON_UUID}."
-    exit 1
-fi
-echo "[Step 1] Found active connection name: '${NM_CON_NAME}'"
+# Explicitly set security to none (open network)
+nmcli connection modify "${HOTSPOT_CON_NAME}" 802-11-wireless-security.key-mgmt "none"
+
+# Activate the connection
+nmcli connection up "${HOTSPOT_CON_NAME}" || { echo "Error creating open hotspot."; exit 1; }
+
+# Set the connection name for later use
+NM_CON_NAME="${HOTSPOT_CON_NAME}"
+echo "[Step 1] Created and activated open hotspot connection '${NM_CON_NAME}'"
 
 echo "[Step 1] Modifying hotspot connection '${NM_CON_NAME}' for static IP and OPEN security..."
 
