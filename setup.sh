@@ -101,49 +101,77 @@ cat << EOF > /tmp/hostapd.conf
 interface=${PI_INTERFACE}
 driver=nl80211
 ssid=${NEW_SSID}
-# Use more compatible b/g mixed mode
-hw_mode=b
-# Try channel 1 which often has better compatibility
-channel=1
+# Use g mode which may work better for visibility
+hw_mode=g
+# Try channel 11 which might avoid interference
+channel=11
+# Ensure open network settings
 macaddr_acl=0
-auth_algs=1
-# Make sure SSID is broadcast (0=broadcast, 1=hidden)
+auth_algs=3
+# Make absolutely sure SSID is broadcast 
 ignore_broadcast_ssid=0
 
 # Basic settings for open network
 wpa=0
 
-# Simplified Android compatibility settings
-wmm_enabled=1
-# Disable 802.11n which can cause problems on some devices
+# Bare minimum settings needed
+wmm_enabled=0
 ieee80211n=0
-beacon_int=100
-dtim_period=2
+# Increase beacon frequency for better visibility
+beacon_int=50
 
-# Basic country settings
-country_code=DE
-ieee80211d=1
-
-# Remove potentially problematic advanced parameters
+# Try without country code which can sometimes limit broadcasting
+#country_code=DE
+#ieee80211d=1
 EOF
 
-echo "Using basic and compatible hostapd configuration for maximum device compatibility"
+echo "Using ultra-basic hostapd configuration for maximum compatibility"
 
-# Debug information
-echo "Checking WiFi interface capabilities..."
-iw list || echo "iw command not available or interface not detected properly"
+# Check for any RF blocks
+echo "Checking for RF blocks..."
+if command -v rfkill &> /dev/null; then
+    rfkill list
+    echo "Unblocking all WiFi devices..."
+    rfkill unblock wifi
+fi
 
-# Turn on WiFi regulatory domain to be safe
-iw reg set DE 2>/dev/null || echo "Could not set regulatory domain"
+# Try to ensure the adapter is in the right mode
+echo "Making sure WiFi interface is in AP mode..."
+iw dev ${PI_INTERFACE} set type __ap || echo "Could not set AP mode (might already be in AP mode)"
 
-# Ensure hostapd has debug logging enabled
-echo "Starting hostapd with verbose logging..."
-hostapd -dd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1
+# Start hostapd with aggressive logging
+echo "Starting hostapd with enhanced logging..."
+hostapd -dd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1 || {
+    echo "Direct hostapd failed, trying NetworkManager fallback method..."
+    
+    # Kill hostapd if it's running
+    killall hostapd 2>/dev/null || true
+    
+    # Try creating a hotspot through NetworkManager as fallback
+    echo "Attempting to create hotspot via NetworkManager..."
+    # Create a basic connection
+    nmcli con add type wifi ifname ${PI_INTERFACE} con-name "NM-Hotspot" autoconnect no ssid "${NEW_SSID}" || true
+    # Configure it as an access point
+    nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared || true
+    # Remove security
+    nmcli con modify "NM-Hotspot" wifi-sec.key-mgmt none || true
+    # Activate it
+    nmcli con up "NM-Hotspot" || echo "NetworkManager fallback also failed"
+    
+    NM_CON_NAME="NM-Hotspot"
+}
+
 sleep 3
 
-# Show information from hostapd log
-echo "Latest hostapd log entries:"
-tail -n 20 /tmp/hostapd.log || echo "No hostapd log available"
+# Show informative messages
+echo "==== WiFi AP Troubleshooting ===="
+echo "If Android devices cannot see the network:"
+echo "1. Verify the WiFi adapter supports AP mode: check 'iw list' output for 'AP' in 'Supported interface modes'"
+echo "2. Try rebooting the Raspberry Pi after setup"
+echo "3. Ensure Android WiFi scanning is enabled"
+echo "4. Try moving closer to the Raspberry Pi"
+echo "5. Check /tmp/hostapd.log for errors"
+echo "==============================="
 
 # Configure the interface with static IP
 echo "Setting static IP on ${PI_INTERFACE}..."
