@@ -57,43 +57,57 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# --- Step 1: Configure NetworkManager Connection as Open AP ---
-echo "[Step 1] Deleting existing NetworkManager connection '${NM_CON_NAME}' (if it exists)..."
-nmcli connection delete "${NM_CON_NAME}" || echo "Connection '${NM_CON_NAME}' did not exist or couldn't be deleted."
-sleep 1
+# --- Step 1: Configure NetworkManager Hotspot ---
+echo "[Step 1] Disconnecting device ${PI_INTERFACE} if active..."
+nmcli device disconnect "${PI_INTERFACE}" || echo "Device ${PI_INTERFACE} was not connected."
+sleep 2
 
-# Define a unique SSID to avoid conflicts
+# Define the desired SSID
 NEW_SSID="PiVideoWifi"
-echo "[Step 1] Creating new NetworkManager connection '${NM_CON_NAME}' as Open Access Point with SSID '${NEW_SSID}'..."
+echo "[Step 1] Creating Wi-Fi hotspot with SSID '${NEW_SSID}' on device ${PI_INTERFACE}..."
 
-# Create a new connection configured as an Access Point (Hotspot) - Simplified security
-nmcli connection add type wifi ifname "${PI_INTERFACE}" con-name "${NM_CON_NAME}" autoconnect yes ssid "${NEW_SSID}" -- \
-    802-11-wireless.mode ap \
-    802-11-wireless.band bg \
-    wifi-sec.key-mgmt none || { echo "Error creating new NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
+# Use the dedicated hotspot command. This creates an AP with WPA security by default.
+# We will modify it immediately after to remove security and set the static IP.
+nmcli device wifi hotspot ifname "${PI_INTERFACE}" ssid "${NEW_SSID}" password "temporarypassword" || { echo "Error creating initial hotspot using 'nmcli device wifi hotspot'."; exit 1; }
+sleep 5 # Give NM time to create and activate the profile
 
-echo "[Step 1] Configuring Static IP for connection '${NM_CON_NAME}'..."
+# Dynamically find the connection name associated with the active hotspot on the interface
+echo "[Step 1] Finding the active connection profile name for ${PI_INTERFACE}..."
+ACTIVE_CON_UUID=$(nmcli -g GENERAL.CONNECTION device show "${PI_INTERFACE}")
+if [ -z "$ACTIVE_CON_UUID" ]; then
+    echo "Error: Could not find an active connection UUID for ${PI_INTERFACE} after creating hotspot."
+    exit 1
+fi
+NM_CON_NAME=$(nmcli -g connection.id connection show "${ACTIVE_CON_UUID}")
+if [ -z "$NM_CON_NAME" ]; then
+    echo "Error: Could not find connection name for UUID ${ACTIVE_CON_UUID}."
+    exit 1
+fi
+echo "[Step 1] Found active connection name: '${NM_CON_NAME}'"
+
+echo "[Step 1] Modifying hotspot connection '${NM_CON_NAME}' for open access and static IP..."
+
+# Now modify the connection NM created: remove security and set static IP
 nmcli connection modify "${NM_CON_NAME}" \
+    wifi-sec.key-mgmt none \
+    wifi-sec.psk "" \
+    802-11-wireless-security.key-mgmt none \
+    802-11-wireless-security.psk "" \
     ipv4.method manual \
     ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}" \
     ipv4.gateway "${PI_GATEWAY}" \
     ipv4.dns "${PI_DNS_SERVERS}" \
     ipv4.ignore-auto-dns yes \
     ipv4.ignore-auto-routes yes \
-    ipv6.method ignore || { echo "Error modifying IP settings for NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
+    ipv6.method ignore || { echo "Error modifying the created hotspot connection '${NM_CON_NAME}'."; exit 1; }
 
-echo "[Step 1] Reloading NetworkManager configurations..."
-nmcli connection reload || echo "Warning: Failed to reload NetworkManager connections."
+echo "[Step 1] Reloading and activating modified hotspot connection '${NM_CON_NAME}'..."
+# Bring it down first to ensure settings apply cleanly
+nmcli connection down "${NM_CON_NAME}" || echo "Warning: Connection '${NM_CON_NAME}' might already be down."
 sleep 2
+nmcli connection up "${NM_CON_NAME}" || { echo "Error bringing modified hotspot connection '${NM_CON_NAME}' up."; exit 1; }
 
-echo "[Step 1] Applying new connection configuration (bringing connection up)..."
-# Explicitly bring the connection up after creation/modification
-nmcli connection up "${NM_CON_NAME}" || { echo "Error bringing new NetworkManager connection '${NM_CON_NAME}' up. Check settings and network."; exit 1; }
-
-echo "[Step 1] NetworkManager connection '${NM_CON_NAME}' created/configured and activated."
-sleep 3 # Wait for network to potentially stabilize
-
-echo "[Step 1] Static IP configuration applied."
+echo "[Step 1] NetworkManager hotspot '${NM_CON_NAME}' created/configured and activated."
 sleep 3 # Wait for network to potentially stabilize
 
 # --- Step 2: Install Required Packages ---
