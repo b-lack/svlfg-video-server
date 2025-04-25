@@ -68,7 +68,11 @@ nmcli connection modify "${NM_CON_NAME}" \
     ipv4.ignore-auto-routes yes \
     ipv6.method ignore || { echo "Error modifying NetworkManager connection. Does '${NM_CON_NAME}' exist and match interface ${PI_INTERFACE}?"; exit 1; }
 
-echo "[Step 1] Applying static IP configuration (bringing connection down/up)..."
+# Add this line to disable Wi-Fi security
+echo "[Step 1] Disabling Wi-Fi password (setting security to none)..."
+nmcli connection modify "${NM_CON_NAME}" wifi-sec.key-mgmt none
+
+echo "[Step 1] Applying static IP and security configuration (bringing connection down/up)..."
 nmcli connection down "${NM_CON_NAME}" || echo "Warning: Connection '${NM_CON_NAME}' might already be down."
 sleep 2 # Give it a moment
 nmcli connection up "${NM_CON_NAME}" || { echo "Error bringing NetworkManager connection up. Check settings and network."; exit 1; }
