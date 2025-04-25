@@ -68,47 +68,60 @@ NEW_SSID="SVLFG"
 
 echo "[Step 1] Creating OPEN Wi-Fi hotspot with SSID '${NEW_SSID}' on device ${PI_INTERFACE}..."
 
-# Create the connection profile for an open hotspot (explicitly setting security to none)
+# Remove any existing connection with this name
 HOTSPOT_CON_NAME="Hotspot-${PI_INTERFACE}"
-nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true  # Remove if exists
-nmcli connection add \
-    type wifi \
-    ifname "${PI_INTERFACE}" \
+echo "Removing any existing connection '${HOTSPOT_CON_NAME}'..."
+nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true
+
+# Create a very basic connection first, then modify it
+echo "Creating basic AP connection..."
+nmcli con add \
     con-name "${HOTSPOT_CON_NAME}" \
-    autoconnect yes \
-    wifi.ssid "${NEW_SSID}" \
-    wifi.mode ap \
+    ifname "${PI_INTERFACE}" \
+    type wifi \
+    mode ap \
+    ssid "${NEW_SSID}" \
     ipv4.method shared \
-    ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}" \
+    ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}"
+
+# Explicitly disable all security - very important for Raspberry Pi
+echo "Setting connection to open (no security)..."
+nmcli con modify "${HOTSPOT_CON_NAME}" \
+    wifi-sec.key-mgmt "none" \
+    wifi-sec.psk "" \
+    802-11-wireless-security.key-mgmt "none" \
+    802-11-wireless-security.proto "" \
+    802-11-wireless-security.pairwise "" \
+    802-11-wireless-security.group "" \
+    802-11-wireless-security.wep-key0 "" \
+    802-11-wireless-security.wep-key-type "1"
+
+echo "Setting connection to autoconnect and AP band..."
+nmcli con modify "${HOTSPOT_CON_NAME}" \
+    connection.autoconnect yes \
     802-11-wireless.band bg
 
-# Explicitly set security to none (open network)
-nmcli connection modify "${HOTSPOT_CON_NAME}" 802-11-wireless-security.key-mgmt "none"
+# Show connection details for debugging
+echo "Connection details before activation:"
+nmcli -s connection show "${HOTSPOT_CON_NAME}" | grep -E 'security|key-mgmt|wep'
 
 # Activate the connection
-nmcli connection up "${HOTSPOT_CON_NAME}" || { echo "Error creating open hotspot."; exit 1; }
+echo "Activating connection..."
+nmcli connection up "${HOTSPOT_CON_NAME}" || {
+    echo "Error creating open hotspot."
+    echo "Debug info:"
+    nmcli -f ALL dev wifi
+    nmcli -f ALL connection show "${HOTSPOT_CON_NAME}"
+    exit 1
+}
 
 # Set the connection name for later use
 NM_CON_NAME="${HOTSPOT_CON_NAME}"
 echo "[Step 1] Created and activated open hotspot connection '${NM_CON_NAME}'"
 
-echo "[Step 1] Modifying hotspot connection '${NM_CON_NAME}' for static IP and OPEN security..."
+# Don't modify security settings again since we already did that above
 
-# Remove ALL security settings to ensure open network
-nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.key-mgmt ""
-nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.wep-key0 ""
-nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.wep-key-type ""
-nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.auth-alg ""
-nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security "" # Remove the whole section
-
-
-echo "[Step 1] Reloading and activating modified hotspot connection '${NM_CON_NAME}'..."
-# Bring it down first to ensure settings apply cleanly
-nmcli connection down "${NM_CON_NAME}" || echo "Warning: Connection '${NM_CON_NAME}' might already be down."
-sleep 2
-nmcli connection up "${NM_CON_NAME}" || { echo "Error bringing modified hotspot connection '${NM_CON_NAME}' up."; exit 1; }
-
-echo "[Step 1] NetworkManager hotspot '${NM_CON_NAME}' created/configured with password and activated."
+echo "[Step 1] NetworkManager hotspot '${NM_CON_NAME}' created and activated successfully."
 sleep 3 # Wait for network to potentially stabilize
 
 # --- Step 2: Install Required Packages ---
