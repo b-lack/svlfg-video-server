@@ -62,20 +62,15 @@ echo "[Step 1] Deleting existing NetworkManager connection '${NM_CON_NAME}' (if 
 nmcli connection delete "${NM_CON_NAME}" || echo "Connection '${NM_CON_NAME}' did not exist or couldn't be deleted."
 sleep 1
 
-# Define a unique SSID to avoid conflicts with potentially cached settings for 'Hotspot'
-NEW_SSID="PiVideoWifi" # <--- CHANGE SSID HERE
+# Define a unique SSID to avoid conflicts
+NEW_SSID="PiVideoWifi"
 echo "[Step 1] Creating new NetworkManager connection '${NM_CON_NAME}' as Open Access Point with SSID '${NEW_SSID}'..."
 
-# Create a new connection configured as an Access Point (Hotspot)
-# Use the NEW_SSID for the broadcasted network name.
-# Ensure the mode is 'ap' and security is none.
+# Create a new connection configured as an Access Point (Hotspot) - Simplified security
 nmcli connection add type wifi ifname "${PI_INTERFACE}" con-name "${NM_CON_NAME}" autoconnect yes ssid "${NEW_SSID}" -- \
     802-11-wireless.mode ap \
     802-11-wireless.band bg \
-    wifi-sec.key-mgmt none \
-    wifi-sec.psk "" \
-    wifi-sec.wep-key0 "" \
-    wifi-sec.wep-key-type "" || { echo "Error creating new NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
+    wifi-sec.key-mgmt none || { echo "Error creating new NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
 
 echo "[Step 1] Configuring Static IP for connection '${NM_CON_NAME}'..."
 nmcli connection modify "${NM_CON_NAME}" \
@@ -86,6 +81,10 @@ nmcli connection modify "${NM_CON_NAME}" \
     ipv4.ignore-auto-dns yes \
     ipv4.ignore-auto-routes yes \
     ipv6.method ignore || { echo "Error modifying IP settings for NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
+
+echo "[Step 1] Reloading NetworkManager configurations..."
+nmcli connection reload || echo "Warning: Failed to reload NetworkManager connections."
+sleep 2
 
 echo "[Step 1] Applying new connection configuration (bringing connection up)..."
 # Explicitly bring the connection up after creation/modification
