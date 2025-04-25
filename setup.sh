@@ -64,7 +64,7 @@ sleep 2
 
 # Define the desired SSID and Password
 NEW_SSID="SVLFG - Broadcast"
-NEW_PASSWORD="svlfg" # Set your desired password here
+NEW_PASSWORD="svlfg123" # Set your desired password here
 echo "[Step 1] Creating Wi-Fi hotspot with SSID '${NEW_SSID}' and password on device ${PI_INTERFACE}..."
 
 # Use the dedicated hotspot command with the desired password.
