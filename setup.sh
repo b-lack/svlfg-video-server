@@ -57,18 +57,19 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# --- Step 1: Configure NetworkManager Hotspot ---
+# --- Step 1: Configure NetworkManager Hotspot with Password ---
 echo "[Step 1] Disconnecting device ${PI_INTERFACE} if active..."
 nmcli device disconnect "${PI_INTERFACE}" || echo "Device ${PI_INTERFACE} was not connected."
 sleep 2
 
-# Define the desired SSID
-NEW_SSID="PiVideoWifi"
-echo "[Step 1] Creating Wi-Fi hotspot with SSID '${NEW_SSID}' on device ${PI_INTERFACE}..."
+# Define the desired SSID and Password
+NEW_SSID="SVLFG - Broadcast"
+NEW_PASSWORD="svlfg" # Set your desired password here
+echo "[Step 1] Creating Wi-Fi hotspot with SSID '${NEW_SSID}' and password on device ${PI_INTERFACE}..."
 
-# Use the dedicated hotspot command. This creates an AP with WPA security by default.
-# We will modify it immediately after to remove security and set the static IP.
-nmcli device wifi hotspot ifname "${PI_INTERFACE}" ssid "${NEW_SSID}" password "temporarypassword" || { echo "Error creating initial hotspot using 'nmcli device wifi hotspot'."; exit 1; }
+# Use the dedicated hotspot command with the desired password.
+# This creates an AP with WPA2-PSK security by default.
+nmcli device wifi hotspot ifname "${PI_INTERFACE}" ssid "${NEW_SSID}" password "${NEW_PASSWORD}" || { echo "Error creating initial hotspot using 'nmcli device wifi hotspot'."; exit 1; }
 sleep 5 # Give NM time to create and activate the profile
 
 # Dynamically find the connection name associated with the active hotspot on the interface
@@ -85,21 +86,18 @@ if [ -z "$NM_CON_NAME" ]; then
 fi
 echo "[Step 1] Found active connection name: '${NM_CON_NAME}'"
 
-echo "[Step 1] Modifying hotspot connection '${NM_CON_NAME}' for open access and static IP..."
+echo "[Step 1] Modifying hotspot connection '${NM_CON_NAME}' for static IP..."
 
-# Now modify the connection NM created: remove security and set static IP
+# Now modify the connection NM created ONLY for static IP settings.
+# We KEEP the security settings created by the 'hotspot' command.
 nmcli connection modify "${NM_CON_NAME}" \
-    wifi-sec.key-mgmt none \
-    wifi-sec.psk "" \
-    802-11-wireless-security.key-mgmt none \
-    802-11-wireless-security.psk "" \
     ipv4.method manual \
     ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}" \
     ipv4.gateway "${PI_GATEWAY}" \
     ipv4.dns "${PI_DNS_SERVERS}" \
     ipv4.ignore-auto-dns yes \
     ipv4.ignore-auto-routes yes \
-    ipv6.method ignore || { echo "Error modifying the created hotspot connection '${NM_CON_NAME}'."; exit 1; }
+    ipv6.method ignore || { echo "Error modifying IP settings for the created hotspot connection '${NM_CON_NAME}'."; exit 1; }
 
 echo "[Step 1] Reloading and activating modified hotspot connection '${NM_CON_NAME}'..."
 # Bring it down first to ensure settings apply cleanly
@@ -107,7 +105,7 @@ nmcli connection down "${NM_CON_NAME}" || echo "Warning: Connection '${NM_CON_NA
 sleep 2
 nmcli connection up "${NM_CON_NAME}" || { echo "Error bringing modified hotspot connection '${NM_CON_NAME}' up."; exit 1; }
 
-echo "[Step 1] NetworkManager hotspot '${NM_CON_NAME}' created/configured and activated."
+echo "[Step 1] NetworkManager hotspot '${NM_CON_NAME}' created/configured with password and activated."
 sleep 3 # Wait for network to potentially stabilize
 
 # --- Step 2: Install Required Packages ---
