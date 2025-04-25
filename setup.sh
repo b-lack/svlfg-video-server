@@ -73,65 +73,93 @@ HOTSPOT_CON_NAME="Hotspot-${PI_INTERFACE}"
 echo "Removing any existing connection '${HOTSPOT_CON_NAME}'..."
 nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true
 
-# Create a very basic connection first, then modify it
-echo "Creating basic AP connection..."
-nmcli con add \
-    con-name "${HOTSPOT_CON_NAME}" \
-    ifname "${PI_INTERFACE}" \
-    type wifi \
-    mode ap \
-    ssid "${NEW_SSID}" \
-    ipv4.method shared \
-    ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}"
+# Install only the necessary packages
+echo "Installing required packages..."
+apt-get update
+apt-get install -y hostapd dnsmasq iptables-persistent
 
-# Explicitly disable all security - very important for Raspberry Pi
-echo "Setting connection to open (no security)..."
-nmcli con modify "${HOTSPOT_CON_NAME}" \
-    wifi-sec.key-mgmt "none" \
-    wifi-sec.psk "" \
-    802-11-wireless-security.key-mgmt "none" \
-    802-11-wireless-security.proto "" \
-    802-11-wireless-security.pairwise "" \
-    802-11-wireless-security.group "" \
-    802-11-wireless-security.wep-key0 "" \
-    802-11-wireless-security.wep-key-type "1"
+# Stop and disable any conflicting services
+echo "Stopping any existing WiFi services..."
+systemctl stop hostapd 2>/dev/null || true
+systemctl stop wpa_supplicant 2>/dev/null || true 
+killall hostapd 2>/dev/null || true
+killall wpa_supplicant 2>/dev/null || true
+sleep 1
 
-echo "Setting connection to autoconnect and AP band..."
-nmcli con modify "${HOTSPOT_CON_NAME}" \
-    connection.autoconnect yes \
-    802-11-wireless.band bg
+# More aggressively reset the WiFi interface
+echo "Resetting WiFi interface ${PI_INTERFACE}..."
+ip link set ${PI_INTERFACE} down
+# Wait for interface to fully go down
+sleep 2
+# Bring interface back up
+ip link set ${PI_INTERFACE} up
+sleep 2
 
-# Show connection details for debugging
-echo "Connection details before activation:"
-nmcli -s connection show "${HOTSPOT_CON_NAME}" | grep -E 'security|key-mgmt|wep'
+# Create a more Android-compatible hostapd configuration
+echo "Creating hostapd configuration with enhanced Android compatibility..."
+cat << EOF > /tmp/hostapd.conf
+interface=${PI_INTERFACE}
+driver=nl80211
+ssid=${NEW_SSID}
+# Use more compatible b/g mixed mode
+hw_mode=b
+# Try channel 1 which often has better compatibility
+channel=1
+macaddr_acl=0
+auth_algs=1
+# Make sure SSID is broadcast (0=broadcast, 1=hidden)
+ignore_broadcast_ssid=0
 
-# Activate the connection
-echo "Activating connection..."
-nmcli connection up "${HOTSPOT_CON_NAME}" || {
-    echo "Error creating open hotspot."
-    echo "Debug info:"
-    nmcli -f ALL dev wifi
-    nmcli -f ALL connection show "${HOTSPOT_CON_NAME}"
-    exit 1
-}
+# Basic settings for open network
+wpa=0
 
-# Set the connection name for later use
-NM_CON_NAME="${HOTSPOT_CON_NAME}"
-echo "[Step 1] Created and activated open hotspot connection '${NM_CON_NAME}'"
+# Simplified Android compatibility settings
+wmm_enabled=1
+# Disable 802.11n which can cause problems on some devices
+ieee80211n=0
+beacon_int=100
+dtim_period=2
 
-# Don't modify security settings again since we already did that above
+# Basic country settings
+country_code=DE
+ieee80211d=1
 
-echo "[Step 1] NetworkManager hotspot '${NM_CON_NAME}' created and activated successfully."
+# Remove potentially problematic advanced parameters
+EOF
+
+echo "Using basic and compatible hostapd configuration for maximum device compatibility"
+
+# Debug information
+echo "Checking WiFi interface capabilities..."
+iw list || echo "iw command not available or interface not detected properly"
+
+# Turn on WiFi regulatory domain to be safe
+iw reg set DE 2>/dev/null || echo "Could not set regulatory domain"
+
+# Ensure hostapd has debug logging enabled
+echo "Starting hostapd with verbose logging..."
+hostapd -dd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1
+sleep 3
+
+# Show information from hostapd log
+echo "Latest hostapd log entries:"
+tail -n 20 /tmp/hostapd.log || echo "No hostapd log available"
+
+# Configure the interface with static IP
+echo "Setting static IP on ${PI_INTERFACE}..."
+ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
+ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
+ip link set ${PI_INTERFACE} up
+
+NM_CON_NAME="hostapd-${PI_INTERFACE}"
+echo "[Step 1] WiFi hotspot '${NEW_SSID}' created successfully."
 sleep 3 # Wait for network to potentially stabilize
 
 # --- Step 2: Install Required Packages ---
-echo "[Step 2] Installing dnsmasq and iptables-persistent..."
+echo "[Step 2] Configuring iptables-persistent..."
 # Pre-configure debconf to avoid interactive prompts for iptables-persistent
 echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
-echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections # Usually disable v6 saving unless needed
-
-apt-get update
-apt-get install -y dnsmasq iptables-persistent
+echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
 
 # --- Step 3: Configure dnsmasq ---
 echo "[Step 3] Configuring dnsmasq (/etc/dnsmasq.conf)..."
@@ -153,13 +181,17 @@ interface=${PI_INTERFACE}
 # Bind to only specified interface
 bind-interfaces
 # Resolve all domains to this Pi
-address=/#/${PI_STATIC_IP} # <--- This line is already here
+address=/#/${PI_STATIC_IP}
+# Exception for captive portal detection URLs - let them through to the internet
+# This helps prevent captive portal notifications
+server=/apple.com/1.1.1.1
+server=/captive.apple.com/1.1.1.1
+server=/clients3.google.com/1.1.1.1
 # Standard options
 domain-needed
 bogus-priv
 # Optionally increase cache size
 # cache-size=1000
-
 EOF
 
 # Add DHCP configuration if enabled
@@ -171,7 +203,6 @@ if [ "$ENABLE_DHCP" = "true" ]; then
       echo "Warning: Script currently assumes /24 prefix for DHCP subnet mask. Adjust manually if needed."
       # Add more complex prefix-to-mask logic here if necessary
     fi
-
     cat << EOF >> "$DNSMASQ_CONF"
 # --- DHCP Settings ---
 dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},${SUBNET_MASK},${DHCP_LEASE_TIME}
@@ -195,8 +226,9 @@ if systemctl is-active --quiet systemd-resolved; then
 else
     echo "systemd-resolved was not active."
 fi
+
 # Optional: Force update /etc/resolv.conf for the Pi itself
-# echo "nameserver ${PI_DNS_SERVERS//,/$'\n'nameserver }" > /etc/resolv.conf # More robust way needed potentially
+# echo "nameserver ${PI_DNS_SERVERS//,/$'\n'}" > /etc/resolv.conf # More robust way needed potentially
 
 echo "[Step 4] Restarting and enabling dnsmasq service..."
 systemctl restart dnsmasq
@@ -206,32 +238,18 @@ sleep 2 # Wait for service
 
 # --- Step 5: Configure iptables Rules ---
 echo "[Step 5] Configuring iptables redirect rules (Ports 80,443 -> ${TARGET_PORT})..."
-
 # Add rules to redirect web traffic to captive portal
 echo "Adding iptables rule for HTTP (port 80) → port ${TARGET_PORT}..."
 iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port ${TARGET_PORT}
-
 echo "Adding iptables rule for HTTPS (port 443) → port 3443..."
 iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
 
-# Add special rules for captive portal detection
-echo "Adding captive portal detection handling..."
-iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d captive.apple.com -j REDIRECT --to-port ${TARGET_PORT}
-iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d www.apple.com -j REDIRECT --to-port ${TARGET_PORT}
-iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d clients3.google.com -j REDIRECT --to-port ${TARGET_PORT}
-
-# Add rules for both HTTP (80) and HTTPS (443)
-#add_redirect_rule 80
-#add_redirect_rule 443
-
 # --- Step 6: Make iptables Rules Persistent ---
 echo "[Step 6] Saving iptables rules..."
-# The package installation should have prompted for saving, but save again just in case.
 netfilter-persistent save
 
 # --- Step 7: Fix dnsmasq Startup Timing Issues ---
 echo "[Step 7] Fixing dnsmasq startup timing issues..."
-
 # Create NetworkManager dispatcher script to restart dnsmasq when wlan1 comes up
 echo "Creating NetworkManager dispatcher script..."
 mkdir -p /etc/NetworkManager/dispatcher.d/
@@ -290,12 +308,6 @@ chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$CERT_DIR/key.pem" "$CERT_DIR
 chmod 644 "$CERT_DIR/cert.pem"  # Everyone can read the certificate
 chmod 600 "$CERT_DIR/key.pem"   # Only owner can read the private key
 
-# After generating certificates
-chown "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$CERT_DIR/privkey.pem" "$CERT_DIR/fullchain.pem"
-chmod 644 "$CERT_DIR/fullchain.pem"  # Everyone can read the certificate
-chmod 600 "$CERT_DIR/privkey.pem"   # Only owner can read the private key
-
-
 # --- Step 9: Completion ---
 echo ""
 echo "--- Setup Complete! ---"
@@ -317,5 +329,4 @@ echo "3.  Clients should get DNS/IP automatically (if DHCP enabled) or configure
 echo "4.  Test DNS resolution and HTTP access (e.g., http://example.com) from a client device."
 echo "5.  A reboot (sudo reboot) is recommended to verify all changes work properly."
 echo ""
-
 exit 0
