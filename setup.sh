@@ -73,13 +73,13 @@ HOTSPOT_CON_NAME="Hotspot-${PI_INTERFACE}"
 echo "Removing any existing connection '${HOTSPOT_CON_NAME}'..."
 nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true
 
-# Try an alternative approach - install and use create_ap
-echo "Installing create_ap utility..."
+# Install only the necessary packages
+echo "Installing required packages..."
 apt-get update
-apt-get install -y git util-linux procps hostapd iproute2 iw haveged dnsmasq
+apt-get install -y hostapd dnsmasq iptables-persistent
 
-# Check if create_ap is already installed
-if [ ! -d "/tmp/create_ap" ]; then
+# Stop any conflicting services
+echo "Stopping any existing WiFi services..."
     echo "Cloning create_ap repository..."
     git clone https://github.com/oblique/create_ap /tmp/create_ap
     cd /tmp/create_ap
