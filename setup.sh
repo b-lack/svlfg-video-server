@@ -104,7 +104,7 @@ interface=${PI_INTERFACE}
 # Bind to only specified interface
 bind-interfaces
 # Resolve all domains to this Pi
-address=/#/${PI_STATIC_IP} # <--- This line is already here
+# address=/#/${PI_STATIC_IP} # <--- This line is already here
 # Standard options
 domain-needed
 bogus-priv
