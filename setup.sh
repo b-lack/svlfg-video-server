@@ -57,8 +57,21 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# --- Step 1: Configure Static IP using nmcli ---
-echo "[Step 1] Configuring Static IP for interface ${PI_INTERFACE} via connection '${NM_CON_NAME}'..."
+# --- Step 1: Configure NetworkManager Connection as Open AP ---
+echo "[Step 1] Deleting existing NetworkManager connection '${NM_CON_NAME}' (if it exists)..."
+nmcli connection delete "${NM_CON_NAME}" || echo "Connection '${NM_CON_NAME}' did not exist or couldn't be deleted."
+sleep 1
+
+echo "[Step 1] Creating new NetworkManager connection '${NM_CON_NAME}' as Open Access Point..."
+# Create a new connection configured as an Access Point (Hotspot)
+# Use the interface name as the SSID for simplicity, or set a specific one.
+# Ensure the mode is 'ap' and security is none.
+nmcli connection add type wifi ifname "${PI_INTERFACE}" con-name "${NM_CON_NAME}" autoconnect yes ssid "${NM_CON_NAME}" -- \
+    802-11-wireless.mode ap \
+    802-11-wireless.band bg \
+    wifi-sec.key-mgmt none || { echo "Error creating new NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
+
+echo "[Step 1] Configuring Static IP for connection '${NM_CON_NAME}'..."
 nmcli connection modify "${NM_CON_NAME}" \
     ipv4.method manual \
     ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}" \
@@ -66,24 +79,15 @@ nmcli connection modify "${NM_CON_NAME}" \
     ipv4.dns "${PI_DNS_SERVERS}" \
     ipv4.ignore-auto-dns yes \
     ipv4.ignore-auto-routes yes \
-    ipv6.method ignore || { echo "Error modifying NetworkManager connection. Does '${NM_CON_NAME}' exist and match interface ${PI_INTERFACE}?"; exit 1; }
+    ipv6.method ignore || { echo "Error modifying IP settings for NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
 
-# Add this block to disable Wi-Fi security and clear old keys
-echo "[Step 1] Disabling Wi-Fi password and clearing security keys..."
-nmcli connection modify "${NM_CON_NAME}" \
-    wifi-sec.key-mgmt none \
-    wifi-sec.psk "" \
-    wifi-sec.wep-key0 "" \
-    wifi-sec.wep-key-type "" \
-    802-11-wireless-security.psk "" \
-    802-11-wireless-security.key-mgmt none \
-    802-11-wireless-security.wep-key0 "" \
-    802-11-wireless-security.wep-key-type "" || echo "Warning: Failed to clear all security properties, continuing..."
+echo "[Step 1] Applying new connection configuration (bringing connection up)..."
+# Explicitly bring the connection up after creation/modification
+nmcli connection up "${NM_CON_NAME}" || { echo "Error bringing new NetworkManager connection '${NM_CON_NAME}' up. Check settings and network."; exit 1; }
 
-echo "[Step 1] Applying static IP and security configuration (bringing connection down/up)..."
-nmcli connection down "${NM_CON_NAME}" || echo "Warning: Connection '${NM_CON_NAME}' might already be down."
-sleep 2 # Give it a moment
-nmcli connection up "${NM_CON_NAME}" || { echo "Error bringing NetworkManager connection up. Check settings and network."; exit 1; }
+echo "[Step 1] NetworkManager connection '${NM_CON_NAME}' created/configured and activated."
+sleep 3 # Wait for network to potentially stabilize
+
 echo "[Step 1] Static IP configuration applied."
 sleep 3 # Wait for network to potentially stabilize
 
