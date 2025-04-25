@@ -88,8 +88,12 @@ echo "[Step 1] Found active connection name: '${NM_CON_NAME}'"
 
 echo "[Step 1] Modifying hotspot connection '${NM_CON_NAME}' for static IP and OPEN security..."
 
-# Remove security settings to ensure open network
-nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.key-mgmt none
+# Remove ALL security settings to ensure open network
+nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.key-mgmt ""
+nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.wep-key0 ""
+nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.wep-key-type ""
+nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.auth-alg ""
+nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security "" # Remove the whole section
 
 
 echo "[Step 1] Reloading and activating modified hotspot connection '${NM_CON_NAME}'..."
