@@ -64,12 +64,12 @@ sleep 2
 
 # Define the desired SSID and Password
 NEW_SSID="SVLFG"
+# No password for open network
 
 echo "[Step 1] Creating OPEN Wi-Fi hotspot with SSID '${NEW_SSID}' on device ${PI_INTERFACE}..."
 
-# Use the dedicated hotspot command with the desired password.
-# This creates an AP with WPA2-PSK security by default.
-nmcli device wifi hotspot ifname "${PI_INTERFACE}" ssid "${NEW_SSID}" || { echo "Error creating open hotspot."; exit 1; }
+# Create open hotspot (no password)
+nmcli device wifi hotspot ifname "${PI_INTERFACE}" ssid "${NEW_SSID}" band bg || { echo "Error creating open hotspot."; exit 1; }
 sleep 5 # Give NM time to create and activate the profile
 
 # Dynamically find the connection name associated with the active hotspot on the interface
@@ -86,18 +86,11 @@ if [ -z "$NM_CON_NAME" ]; then
 fi
 echo "[Step 1] Found active connection name: '${NM_CON_NAME}'"
 
-echo "[Step 1] Modifying hotspot connection '${NM_CON_NAME}' for static IP..."
+echo "[Step 1] Modifying hotspot connection '${NM_CON_NAME}' for static IP and OPEN security..."
 
-# Now modify the connection NM created ONLY for static IP settings.
-# We KEEP the security settings created by the 'hotspot' command.
-nmcli connection modify "${NM_CON_NAME}" \
-    ipv4.method manual \
-    ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}" \
-    ipv4.gateway "${PI_GATEWAY}" \
-    ipv4.dns "${PI_DNS_SERVERS}" \
-    ipv4.ignore-auto-dns yes \
-    ipv4.ignore-auto-routes yes \
-    ipv6.method ignore || { echo "Error modifying IP settings for the created hotspot connection '${NM_CON_NAME}'."; exit 1; }
+# Remove security settings to ensure open network
+nmcli connection modify "${NM_CON_NAME}" 802-11-wireless-security.key-mgmt none
+
 
 echo "[Step 1] Reloading and activating modified hotspot connection '${NM_CON_NAME}'..."
 # Bring it down first to ensure settings apply cleanly
