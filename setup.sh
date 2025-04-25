@@ -68,9 +68,17 @@ nmcli connection modify "${NM_CON_NAME}" \
     ipv4.ignore-auto-routes yes \
     ipv6.method ignore || { echo "Error modifying NetworkManager connection. Does '${NM_CON_NAME}' exist and match interface ${PI_INTERFACE}?"; exit 1; }
 
-# Add this line to disable Wi-Fi security
-echo "[Step 1] Disabling Wi-Fi password (setting security to none)..."
-nmcli connection modify "${NM_CON_NAME}" wifi-sec.key-mgmt none
+# Add this block to disable Wi-Fi security and clear old keys
+echo "[Step 1] Disabling Wi-Fi password and clearing security keys..."
+nmcli connection modify "${NM_CON_NAME}" \
+    wifi-sec.key-mgmt none \
+    wifi-sec.psk "" \
+    wifi-sec.wep-key0 "" \
+    wifi-sec.wep-key-type "" \
+    802-11-wireless-security.psk "" \
+    802-11-wireless-security.key-mgmt none \
+    802-11-wireless-security.wep-key0 "" \
+    802-11-wireless-security.wep-key-type "" || echo "Warning: Failed to clear all security properties, continuing..."
 
 echo "[Step 1] Applying static IP and security configuration (bringing connection down/up)..."
 nmcli connection down "${NM_CON_NAME}" || echo "Warning: Connection '${NM_CON_NAME}' might already be down."
