@@ -134,7 +134,7 @@ interface=${PI_INTERFACE}
 # Bind to only specified interface
 bind-interfaces
 # Resolve all domains to this Pi
-# address=/#/${PI_STATIC_IP} # <--- This line is already here
+address=/#/${PI_STATIC_IP} # <--- This line is already here
 # Standard options
 domain-needed
 bogus-priv
@@ -188,12 +188,18 @@ sleep 2 # Wait for service
 # --- Step 5: Configure iptables Rules ---
 echo "[Step 5] Configuring iptables redirect rules (Ports 80,443 -> ${TARGET_PORT})..."
 
-# Function to add an iptables rule for a specific port if it doesn't exist
-echo "Adding iptables rule for HTTP (port 80) → port 3000..."
-#iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port 3000
+# Add rules to redirect web traffic to captive portal
+echo "Adding iptables rule for HTTP (port 80) → port ${TARGET_PORT}..."
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port ${TARGET_PORT}
 
 echo "Adding iptables rule for HTTPS (port 443) → port 3443..."
-#iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
+
+# Add special rules for captive portal detection
+echo "Adding captive portal detection handling..."
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d captive.apple.com -j REDIRECT --to-port ${TARGET_PORT}
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d www.apple.com -j REDIRECT --to-port ${TARGET_PORT}
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d clients3.google.com -j REDIRECT --to-port ${TARGET_PORT}
 
 # Add rules for both HTTP (80) and HTTPS (443)
 #add_redirect_rule 80
