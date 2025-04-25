@@ -46,6 +46,18 @@ app.use((req, res, next) => {
 app.use(cors());
 app.use(express.static('public'));
 
+// Captive portal detection endpoints
+const captivePortalHandler = (req, res) => {
+  // Force redirect to main page
+  res.redirect(302, '/');
+};
+
+app.get('/generate_204', captivePortalHandler); // Android
+app.get('/hotspot-detect.html', captivePortalHandler); // Apple
+app.get('/ncsi.txt', captivePortalHandler); // Windows
+app.get('/connecttest.txt', captivePortalHandler); // Windows 10+
+app.get('/redirect', captivePortalHandler); // Some Linux distros
+
 // After all other middleware and routes
 app.use((req, res) => {
   // For API routes, you might want to return a 404 JSON response
