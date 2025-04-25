@@ -62,14 +62,20 @@ echo "[Step 1] Deleting existing NetworkManager connection '${NM_CON_NAME}' (if 
 nmcli connection delete "${NM_CON_NAME}" || echo "Connection '${NM_CON_NAME}' did not exist or couldn't be deleted."
 sleep 1
 
-echo "[Step 1] Creating new NetworkManager connection '${NM_CON_NAME}' as Open Access Point..."
+# Define a unique SSID to avoid conflicts with potentially cached settings for 'Hotspot'
+NEW_SSID="PiVideoWifi" # <--- CHANGE SSID HERE
+echo "[Step 1] Creating new NetworkManager connection '${NM_CON_NAME}' as Open Access Point with SSID '${NEW_SSID}'..."
+
 # Create a new connection configured as an Access Point (Hotspot)
-# Use the interface name as the SSID for simplicity, or set a specific one.
+# Use the NEW_SSID for the broadcasted network name.
 # Ensure the mode is 'ap' and security is none.
-nmcli connection add type wifi ifname "${PI_INTERFACE}" con-name "${NM_CON_NAME}" autoconnect yes ssid "${NM_CON_NAME}" -- \
+nmcli connection add type wifi ifname "${PI_INTERFACE}" con-name "${NM_CON_NAME}" autoconnect yes ssid "${NEW_SSID}" -- \
     802-11-wireless.mode ap \
     802-11-wireless.band bg \
-    wifi-sec.key-mgmt none || { echo "Error creating new NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
+    wifi-sec.key-mgmt none \
+    wifi-sec.psk "" \
+    wifi-sec.wep-key0 "" \
+    wifi-sec.wep-key-type "" || { echo "Error creating new NetworkManager connection '${NM_CON_NAME}'."; exit 1; }
 
 echo "[Step 1] Configuring Static IP for connection '${NM_CON_NAME}'..."
 nmcli connection modify "${NM_CON_NAME}" \
