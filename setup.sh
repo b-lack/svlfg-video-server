@@ -73,80 +73,48 @@ HOTSPOT_CON_NAME="Hotspot-${PI_INTERFACE}"
 echo "Removing any existing connection '${HOTSPOT_CON_NAME}'..."
 nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true
 
-# Try an alternative approach - install and use create_ap
-echo "Installing create_ap utility..."
+# Install only the required packages
+echo "Installing required packages..."
 apt-get update
-apt-get install -y git util-linux procps hostapd iproute2 iw haveged dnsmasq
+apt-get install -y hostapd dnsmasq iptables-persistent
 
-# Check if create_ap is already installed
-if [ ! -d "/tmp/create_ap" ]; then
-    echo "Cloning create_ap repository..."
-    git clone https://github.com/oblique/create_ap /tmp/create_ap
-    cd /tmp/create_ap
-    make install
-    cd -
-else
-    echo "create_ap already cloned, proceeding with installation..."
-    cd /tmp/create_ap
-    make install
-    cd -
-fi
+# Stop and disable any existing hostapd service
+systemctl stop hostapd 2>/dev/null || true
+systemctl disable hostapd 2>/dev/null || true
 
-# Kill any existing create_ap instances
-echo "Stopping any existing WiFi hotspots..."
-killall create_ap 2>/dev/null || true
-sleep 1
-
-# Create an open WiFi hotspot
-echo "Creating open WiFi hotspot using create_ap..."
-create_ap --no-virt -n "${PI_INTERFACE}" "${NEW_SSID}" &
-HOTSPOT_PID=$!
-sleep 5
-
-# Check if the hotspot started successfully
-if kill -0 $HOTSPOT_PID 2>/dev/null; then
-    echo "Hotspot started successfully with PID $HOTSPOT_PID"
-    NM_CON_NAME="create_ap-${PI_INTERFACE}"
-else
-    echo "Error: Failed to start the WiFi hotspot."
-    echo "Trying alternative method with hostapd directly..."
-    
-    # Create a simple hostapd configuration
-    cat << EOF > /tmp/hostapd.conf
+# Create a simple hostapd configuration
+echo "Creating hostapd configuration..."
+cat << EOF > /tmp/hostapd.conf
 interface=${PI_INTERFACE}
 driver=nl80211
 ssid=${NEW_SSID}
 hw_mode=g
 channel=7
-wmm_enabled=0
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
 EOF
 
-    # Configure the interface with static IP
-    ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
-    ip link set ${PI_INTERFACE} up
-    
-    # Start hostapd
-    hostapd -B /tmp/hostapd.conf
-    sleep 2
-    
-    NM_CON_NAME="hostapd-${PI_INTERFACE}"
-    echo "Hotspot created using hostapd directly."
-fi
+# Configure the interface with static IP
+ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
+ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
+ip link set ${PI_INTERFACE} up
 
+# Start hostapd
+echo "Starting hostapd..."
+hostapd -B /tmp/hostapd.conf
+sleep 2
+
+NM_CON_NAME="hostapd-${PI_INTERFACE}"
 echo "[Step 1] WiFi hotspot '${NEW_SSID}' created successfully."
 sleep 3 # Wait for network to potentially stabilize
 
 # --- Step 2: Install Required Packages ---
-echo "[Step 2] Installing dnsmasq and iptables-persistent..."
+# Note: We already installed required packages above
+echo "[Step 2] Configuring iptables-persistent..."
 # Pre-configure debconf to avoid interactive prompts for iptables-persistent
 echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
-echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections # Usually disable v6 saving unless needed
-
-apt-get update
-apt-get install -y dnsmasq iptables-persistent
+echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
 
 # --- Step 3: Configure dnsmasq ---
 echo "[Step 3] Configuring dnsmasq (/etc/dnsmasq.conf)..."
