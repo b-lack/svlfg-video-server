@@ -65,11 +65,11 @@ sleep 2
 # Define the desired SSID and Password
 NEW_SSID="SVLFG - Broadcast"
 NEW_PASSWORD="svlfg123" # Set your desired password here
-echo "[Step 1] Creating Wi-Fi hotspot with SSID '${NEW_SSID}' and password on device ${PI_INTERFACE}..."
+echo "[Step 1] Creating OPEN Wi-Fi hotspot with SSID '${NEW_SSID}' on device ${PI_INTERFACE}..."
 
 # Use the dedicated hotspot command with the desired password.
 # This creates an AP with WPA2-PSK security by default.
-nmcli device wifi hotspot ifname "${PI_INTERFACE}" ssid "${NEW_SSID}" password "${NEW_PASSWORD}" || { echo "Error creating initial hotspot using 'nmcli device wifi hotspot'."; exit 1; }
+nmcli device wifi hotspot ifname "${PI_INTERFACE}" ssid "${NEW_SSID}" || { echo "Error creating open hotspot."; exit 1; }
 sleep 5 # Give NM time to create and activate the profile
 
 # Dynamically find the connection name associated with the active hotspot on the interface
