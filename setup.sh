@@ -97,11 +97,6 @@ channel=7
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
-# Parameters to help disable captive portal detection
-wmm_enabled=1
-ieee80211n=1
-wpa=0
-ap_isolate=0
 EOF
 
 # Configure the interface with static IP
@@ -148,7 +143,7 @@ interface=${PI_INTERFACE}
 # Bind to only specified interface
 bind-interfaces
 # Resolve all domains to this Pi
-address=/#/${PI_STATIC_IP}
+address=/#/${PI_STATIC_IP} # <--- This line is already here
 # Standard options
 domain-needed
 bogus-priv
@@ -208,6 +203,16 @@ iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT -
 
 echo "Adding iptables rule for HTTPS (port 443) → port 3443..."
 iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
+
+# Add special rules for captive portal detection
+echo "Adding captive portal detection handling..."
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d captive.apple.com -j REDIRECT --to-port ${TARGET_PORT}
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d www.apple.com -j REDIRECT --to-port ${TARGET_PORT}
+iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -d clients3.google.com -j REDIRECT --to-port ${TARGET_PORT}
+
+# Add rules for both HTTP (80) and HTTPS (443)
+#add_redirect_rule 80
+#add_redirect_rule 443
 
 # --- Step 6: Make iptables Rules Persistent ---
 echo "[Step 6] Saving iptables rules..."
