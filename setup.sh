@@ -86,28 +86,49 @@ killall hostapd 2>/dev/null || true
 killall wpa_supplicant 2>/dev/null || true
 sleep 1
 
-# Create a simple hostapd configuration
-echo "Creating hostapd configuration..."
+# More aggressively reset the WiFi interface
+echo "Resetting WiFi interface ${PI_INTERFACE}..."
+ip link set ${PI_INTERFACE} down
+# Wait for interface to fully go down
+sleep 2
+# Bring interface back up
+ip link set ${PI_INTERFACE} up
+sleep 2
+
+# Create a more Android-compatible hostapd configuration
+echo "Creating hostapd configuration with enhanced Android compatibility..."
 cat << EOF > /tmp/hostapd.conf
 interface=${PI_INTERFACE}
 driver=nl80211
 ssid=${NEW_SSID}
 hw_mode=g
-channel=7
+# Channel 6 often has better device compatibility
+channel=6
 macaddr_acl=0
 auth_algs=1
+# Make sure SSID is broadcast (0=broadcast, 1=hidden)
 ignore_broadcast_ssid=0
-# Parameters to help disable captive portal detection
+
+# Basic settings for open network
+wpa=0
+ap_isolate=0
+
+# Required Android compatibility settings
 wmm_enabled=1
 ieee80211n=1
-wpa=0
-# Parameters to improve Android compatibility
 beacon_int=100
-dtim_period=2
-# Make sure network is visible
+dtim_period=1
+
+# Boost signal parameters
 country_code=DE
 ieee80211d=1
 max_num_sta=255
+tx_queue_data2_burst=2147483647
+tx_queue_data3_burst=2147483647
+
+# Performance settings
+ht_capab=[HT40][SHORT-GI-20][DSSS_CCK-40]
+require_ht=0
 EOF
 
 # Configure the interface with static IP
