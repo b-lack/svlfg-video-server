@@ -95,93 +95,66 @@ sleep 2
 ip link set ${PI_INTERFACE} up
 sleep 2
 
-# Create a more Android-compatible hostapd configuration
-echo "Creating hostapd configuration with enhanced Android compatibility..."
-cat << EOF > /tmp/hostapd.conf
-interface=${PI_INTERFACE}
-driver=nl80211
-ssid=${NEW_SSID}
-# Use g mode which may work better for visibility
-hw_mode=g
-# Try channel 11 which might avoid interference
-channel=11
-# Ensure open network settings
-macaddr_acl=0
-auth_algs=3
-# Make absolutely sure SSID is broadcast 
-ignore_broadcast_ssid=0
+# Focus exclusively on NetworkManager for better Android compatibility
+echo "Creating WiFi hotspot using NetworkManager (better Android compatibility)..."
 
-# Basic settings for open network
-wpa=0
+# Remove existing connections with the same name
+echo "Removing any existing NetworkManager connections..."
+nmcli con delete "NM-Hotspot" >/dev/null 2>&1 || true
 
-# Bare minimum settings needed
-wmm_enabled=0
-ieee80211n=0
-# Increase beacon frequency for better visibility
-beacon_int=50
+# Kill any hostapd processes
+killall hostapd 2>/dev/null || true
 
-# Try without country code which can sometimes limit broadcasting
-#country_code=DE
-#ieee80211d=1
-EOF
-
-echo "Using ultra-basic hostapd configuration for maximum compatibility"
-
-# Check for any RF blocks
-echo "Checking for RF blocks..."
+# Check for any RF blocks and unblock if necessary
 if command -v rfkill &> /dev/null; then
+    echo "Checking for RF blocks..."
     rfkill list
     echo "Unblocking all WiFi devices..."
     rfkill unblock wifi
+    sleep 1
 fi
 
-# Try to ensure the adapter is in the right mode
-echo "Making sure WiFi interface is in AP mode..."
-iw dev ${PI_INTERFACE} set type __ap || echo "Could not set AP mode (might already be in AP mode)"
+# Create a basic connection
+echo "Creating NetworkManager access point..."
+nmcli con add type wifi ifname ${PI_INTERFACE} con-name "NM-Hotspot" autoconnect yes ssid "${NEW_SSID}"
 
-# Start hostapd with aggressive logging
-echo "Starting hostapd with enhanced logging..."
-hostapd -dd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1 || {
-    echo "Direct hostapd failed, trying NetworkManager fallback method..."
-    
-    # Kill hostapd if it's running
-    killall hostapd 2>/dev/null || true
-    
-    # Try creating a hotspot through NetworkManager as fallback
-    echo "Attempting to create hotspot via NetworkManager..."
-    # Create a basic connection
-    nmcli con add type wifi ifname ${PI_INTERFACE} con-name "NM-Hotspot" autoconnect no ssid "${NEW_SSID}" || true
-    # Configure it as an access point
-    nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared || true
-    # Remove security
-    nmcli con modify "NM-Hotspot" wifi-sec.key-mgmt none || true
-    # Activate it
-    nmcli con up "NM-Hotspot" || echo "NetworkManager fallback also failed"
-    
-    NM_CON_NAME="NM-Hotspot"
+# Configure it as an access point
+echo "Configuring as open access point..."
+nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared
+# Remove security (make it open)
+nmcli con modify "NM-Hotspot" wifi-sec.key-mgmt none
+# Set explicit channel for better compatibility
+nmcli con modify "NM-Hotspot" 802-11-wireless.channel 1
+# Set broadcast settings
+nmcli con modify "NM-Hotspot" 802-11-wireless.hidden false
+
+# Set the static IP
+echo "Setting static IP..."
+nmcli con modify "NM-Hotspot" ipv4.addresses ${PI_STATIC_IP}/${PI_IP_PREFIX}
+nmcli con modify "NM-Hotspot" ipv4.gateway ${PI_STATIC_IP}
+
+# Activate the connection
+echo "Activating NetworkManager hotspot..."
+nmcli con up "NM-Hotspot" || {
+    echo "NetworkManager approach failed, trying direct IP configuration..."
+    # Configure the interface with static IP directly as fallback
+    ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
+    ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
+    ip link set ${PI_INTERFACE} up
 }
 
-sleep 3
+NM_CON_NAME="NM-Hotspot"
+echo "[Step 1] WiFi hotspot '${NEW_SSID}' created via NetworkManager."
+sleep 3 # Wait for network to stabilize
 
-# Show informative messages
-echo "==== WiFi AP Troubleshooting ===="
-echo "If Android devices cannot see the network:"
-echo "1. Verify the WiFi adapter supports AP mode: check 'iw list' output for 'AP' in 'Supported interface modes'"
-echo "2. Try rebooting the Raspberry Pi after setup"
-echo "3. Ensure Android WiFi scanning is enabled"
-echo "4. Try moving closer to the Raspberry Pi"
-echo "5. Check /tmp/hostapd.log for errors"
-echo "==============================="
-
-# Configure the interface with static IP
-echo "Setting static IP on ${PI_INTERFACE}..."
-ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
-ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
-ip link set ${PI_INTERFACE} up
-
-NM_CON_NAME="hostapd-${PI_INTERFACE}"
-echo "[Step 1] WiFi hotspot '${NEW_SSID}' created successfully."
-sleep 3 # Wait for network to potentially stabilize
+# Display helpful debug information
+echo "==== Android WiFi Troubleshooting ===="
+echo "If network is still not visible on Android:"
+echo "1. Try activating airplane mode, then turn WiFi back on"
+echo "2. Check if the network appears after waiting 30-60 seconds"
+echo "3. Verify the WiFi adapter supports AP mode: $(iw list | grep -A 2 "Supported interface modes" | grep "AP" || echo "AP MODE NOT FOUND - HARDWARE MAY NOT BE COMPATIBLE")"
+echo "4. Run this command to check if the hotspot is active: nmcli dev wifi list --rescan yes"
+echo "======================================="
 
 # --- Step 2: Install Required Packages ---
 echo "[Step 2] Configuring iptables-persistent..."
