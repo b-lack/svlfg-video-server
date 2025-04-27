@@ -360,6 +360,11 @@ if [ "$HOSTAPD_STARTED" = true ]; then
         ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
         ip link set ${PI_INTERFACE} up
         sleep 2 # Give IP time to settle
+
+        # Explicitly restart dnsmasq *after* IP is set for hostapd mode
+        echo "Restarting dnsmasq after setting static IP..."
+        systemctl restart dnsmasq || echo "Warning: Failed to restart dnsmasq after IP assignment."
+        sleep 3 # Give dnsmasq time to start
     else
          echo "Skipping manual static IP configuration (${HOSTAPD_METHOD} mode handles it)."
          # NM in shared mode should configure the IP based on ipv4.addresses setting above
@@ -455,6 +460,14 @@ EOF
         echo "[Step 3] DHCP server disabled in configuration."
     fi
 
+    echo "[Step 3] Validating generated dnsmasq configuration..."
+    if dnsmasq --test -C "$DNSMASQ_CONF"; then
+        echo "[Step 3] dnsmasq configuration syntax OK."
+    else
+        echo "[Step 3] ERROR: dnsmasq configuration syntax check failed. Please review ${DNSMASQ_CONF}"
+        # Optionally exit here if config is critical: exit 1
+    fi
+
     echo "[Step 3] dnsmasq configuration written to ${DNSMASQ_CONF}"
 elif [ "$HOSTAPD_STARTED" = true ] && [ "$HOSTAPD_METHOD" = "nmcli" ]; then
     echo "[Step 3] Skipping system dnsmasq configuration (NetworkManager shared mode handles DHCP/DNS)."
@@ -474,15 +487,8 @@ if [ "$HOSTAPD_STARTED" = true ] && [ "$HOSTAPD_METHOD" = "service" ]; then
         echo "systemd-resolved was not active."
     fi
 
-    # Optional: Force update /etc/resolv.conf for the Pi itself
-    # echo "nameserver ${PI_DNS_SERVERS//,/$'\n'}" > /etc/resolv.conf # More robust way needed potentially
-
-    echo "[Step 4] Restarting and enabling system dnsmasq service (hostapd mode)..."
-    systemctl restart dnsmasq
-    # Enable is handled in configure_nm_unmanaged now
-    # systemctl enable dnsmasq
-    echo "[Step 4] dnsmasq service restarted."
-    sleep 3 # Wait longer for service
+    echo "[Step 4] Checking dnsmasq service status (should have been restarted after IP assignment)..."
+    sleep 1 # Short pause before check
     echo "[Step 4] Checking dnsmasq status..."
     systemctl status dnsmasq --no-pager || echo "Warning: dnsmasq status check failed."
     echo "[Step 4] Checking dnsmasq listeners (should be on ${PI_STATIC_IP}:53)..."
@@ -543,10 +549,27 @@ fi
 
 # --- Step 6: Make iptables Rules Persistent ---
 if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "[Step 6] Enabling IP Forwarding..."
+    # Check if already enabled
+    if grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+        echo "IP forwarding already enabled in /etc/sysctl.conf."
+    else
+        echo "Enabling IP forwarding in /etc/sysctl.conf..."
+        # Uncomment the line if it exists and is commented out
+        sed -i 's/^#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+        # Add the line if it doesn't exist at all
+        if ! grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+            echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+        fi
+    fi
+    # Apply the setting immediately
+    echo "Applying sysctl settings..."
+    sysctl -p || echo "Warning: sysctl -p failed."
+
     echo "[Step 6] Saving iptables rules..."
     netfilter-persistent save
 else
-    echo "[Step 6] Skipping iptables save as hotspot failed."
+    echo "[Step 6] Skipping IP forwarding enable and iptables save as hotspot failed."
 fi
 
 # --- Step 7: Fix dnsmasq Startup Timing Issues ---
@@ -573,10 +596,11 @@ EOF
 chmod +x /etc/NetworkManager/dispatcher.d/99-restart-dnsmasq
 
 # Also modify dnsmasq.service to wait for network and potentially hostapd
-echo "Modifying dnsmasq service to wait for network services and bind to interface..."
+echo "Modifying dnsmasq service to wait for network services..."
 mkdir -p /etc/systemd/system/dnsmasq.service.d/
 # Use printf to handle the interface name correctly in the unit file content
-printf "[Unit]\n# Wait for general network readiness and specific services\n# Bind dnsmasq lifecycle to the specific network device\nWants=network-online.target\nAfter=network-online.target NetworkManager.service hostapd.service\nBindsTo=sys-subsystem-net-devices-%s.device\nAfter=sys-subsystem-net-devices-%s.device\n\n[Service]\n# Add a delay before starting dnsmasq\nExecStartPre=/bin/sleep 10\n" "${PI_INTERFACE}" "${PI_INTERFACE}" > /etc/systemd/system/dnsmasq.service.d/override.conf
+# Simplified override: Removed BindsTo=, relying on Wants/After
+printf "[Unit]\n# Wait for general network readiness and specific services\nWants=network-online.target\nAfter=network-online.target NetworkManager.service hostapd.service\n\n[Service]\n# Add a delay before starting dnsmasq\nExecStartPre=/bin/sleep 10\n" > /etc/systemd/system/dnsmasq.service.d/override.conf
 
 # Reload systemd to apply changes
 systemctl daemon-reload
@@ -631,6 +655,7 @@ if [ "$HOSTAPD_STARTED" = true ]; then
     fi
     echo "* iptables rules allow DHCP/DNS/HTTP/HTTPS and redirect HTTP(S) traffic (ports 80/443) to local ports ${TARGET_PORT}/3443."
     echo "* iptables rules should be persistent across reboots."
+    echo "* IP Forwarding: Enabled in sysctl.conf and applied."
 else
     echo "* WiFi Hotspot Status: FAILED TO START"
     echo "* Persistence: Cannot be guaranteed as startup failed."
