@@ -315,16 +315,12 @@ if [ "$HOSTAPD_STARTED" = true ]; then
 interface=${PI_INTERFACE}
 # Bind to only specified interface
 bind-interfaces
-# Resolve all domains to this Pi
-address=/#/${PI_STATIC_IP}
-# Exception for captive portal detection URLs - let them through to the internet
-# This helps prevent captive portal notifications
-server=/apple.com/1.1.1.1
-server=/captive.apple.com/1.1.1.1
-server=/clients3.google.com/1.1.1.1
+# --- Captive Portal DNS Redirect Removed ---
 # Standard options
 domain-needed
 bogus-priv
+# Use upstream DNS servers defined earlier
+server=${PI_DNS_SERVERS//,/$'\nserver='}
 # Optionally increase cache size
 # cache-size=1000
 EOF
@@ -380,12 +376,10 @@ fi
 
 # --- Step 5: Configure iptables Rules ---
 if [ "$HOSTAPD_STARTED" = true ]; then
-    echo "[Step 5] Configuring iptables redirect rules (Ports 80,443 -> ${TARGET_PORT})..."
-    # Add rules to redirect web traffic to captive portal
-    echo "Adding iptables rule for HTTP (port 80) → port ${TARGET_PORT}..."
-    iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port ${TARGET_PORT}
-    echo "Adding iptables rule for HTTPS (port 443) → port 3443..."
-    iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
+    echo "[Step 5] Clearing previous NAT PREROUTING rules for ${PI_INTERFACE}..."
+    # Flush existing PREROUTING rules for the interface to avoid duplicates or conflicts
+    iptables -t nat -F PREROUTING # Be careful if other rules exist, might need more specific flushing
+    echo "[Step 5] No iptables redirect rules configured (Captive Portal Disabled)."
 else
     echo "[Step 5] Skipping iptables configuration as hotspot failed."
 fi
@@ -468,11 +462,11 @@ echo "Summary:"
 if [ "$HOSTAPD_STARTED" = true ]; then
     echo "* WiFi Hotspot Status: STARTED (using ${NM_CON_NAME})"
     echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured on interface ${PI_INTERFACE}."
-    echo "* dnsmasq installed and configured to resolve all DNS to ${PI_STATIC_IP}."
+    echo "* dnsmasq installed and configured for standard DNS resolution (using ${PI_DNS_SERVERS})."
     if [ "$ENABLE_DHCP" = "true" ]; then
         echo "* dnsmasq DHCP server enabled for range ${DHCP_RANGE_START}-${DHCP_RANGE_END}."
     fi
-    echo "* iptables rules added to redirect HTTP traffic (port 80) to port 3000 and HTTPS traffic (port 443) to port 3443."
+    echo "* iptables rules cleared (No HTTP/HTTPS redirection - Captive Portal Disabled)."
     echo "* iptables rules should be persistent across reboots."
 else
     echo "* WiFi Hotspot Status: FAILED TO START"
@@ -485,10 +479,10 @@ echo "* Added fixes for dnsmasq startup timing issues (NetworkManager dispatcher
 echo ""
 echo "Next Steps:"
 if [ "$HOSTAPD_STARTED" = true ]; then
-    echo "1.  Ensure your web application is running on the Pi and listening on port ${TARGET_PORT}."
+    echo "1.  Ensure your web application is running on the Pi (if needed, access it via ${PI_STATIC_IP}:${TARGET_PORT})."
     echo "2.  Connect client devices to the '${NEW_SSID}' network."
     echo "3.  Clients should get DNS/IP automatically (if DHCP enabled) or configure them manually to use ${PI_STATIC_IP} as DNS."
-    echo "4.  Test DNS resolution and HTTP access (e.g., http://example.com) from a client device."
+    echo "4.  Test DNS resolution and internet access (if Pi has internet) from a client device."
     echo "5.  A reboot (sudo reboot) is recommended to verify all changes work properly."
 else
     echo "1.  Troubleshoot the hotspot failure based on the logs provided."
