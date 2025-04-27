@@ -48,15 +48,41 @@ app.use(express.static('public'));
 
 // Captive portal detection endpoints
 const captivePortalHandler = (req, res) => {
-  // Force redirect to main page
-  res.redirect(302, '/');
+  // Respond with HTTP 204 (No Content) to satisfy connectivity checks
+  // This should prevent the captive portal page from showing on many devices.
+  console.log(`Received connectivity check request: ${req.method} ${req.originalUrl} from ${req.ip}`);
+  res.sendStatus(204); 
 };
 
-app.get('/generate_204', captivePortalHandler); // Android
+app.get('/generate_204', captivePortalHandler); // Android, Google
 app.get('/hotspot-detect.html', captivePortalHandler); // Apple
-app.get('/ncsi.txt', captivePortalHandler); // Windows
-app.get('/connecttest.txt', captivePortalHandler); // Windows 10+
-app.get('/redirect', captivePortalHandler); // Some Linux distros
+app.get('/ncsi.txt', captivePortalHandler); // Windows NCSI
+app.get('/connecttest.txt', captivePortalHandler); // Windows 10+ NCSI
+app.get('/redirect', captivePortalHandler); // Some Linux/Android, older Apple
+
+// Add handlers for requests directly to the intercepted domains' root path
+// These might be requested if the device uses the domain root for checks
+app.get('/', (req, res, next) => {
+  const interceptedDomains = [
+    'connectivitycheck.gstatic.com',
+    'clients3.google.com',
+    'clients.google.com',
+    'captive.apple.com',
+    'www.apple.com',
+    'www.appleiphonecell.com',
+    'airport.us',
+    'ibook.info',
+    'www.msftconnecttest.com',
+    'www.msftncsi.com',
+    'spectrum.s3.amazonaws.com'
+  ];
+  if (interceptedDomains.includes(req.hostname)) {
+    console.log(`Received connectivity check request to domain root: ${req.hostname} from ${req.ip}`);
+    return res.sendStatus(204);
+  }
+  // If not an intercepted domain root request, continue to static serving or SPA handler
+  next();
+});
 
 // After all other middleware and routes
 app.use((req, res) => {
