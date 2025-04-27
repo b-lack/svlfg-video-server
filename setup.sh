@@ -60,7 +60,7 @@ fi
 # --- Step 1: Configure NetworkManager Hotspot with Password ---
 echo "[Step 1] Disconnecting device ${PI_INTERFACE} if active..."
 nmcli device disconnect "${PI_INTERFACE}" || echo "Device ${PI_INTERFACE} was not connected."
-sleep 2
+sleep 3 # Increased delay
 
 # Define the desired SSID and Password
 NEW_SSID="SVLFG"
@@ -72,6 +72,8 @@ echo "[Step 1] Creating OPEN Wi-Fi hotspot with SSID '${NEW_SSID}' on device ${P
 HOTSPOT_CON_NAME="Hotspot-${PI_INTERFACE}"
 echo "Removing any existing connection '${HOTSPOT_CON_NAME}'..."
 nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true
+# Also remove the fallback NM connection if it exists
+nmcli connection delete "NM-Hotspot" >/dev/null 2>&1 || true
 
 # Verify WiFi adapter supports AP mode
 echo "Checking if adapter supports AP mode..."
@@ -85,25 +87,39 @@ echo "Installing required packages..."
 apt-get update
 apt-get install -y hostapd dnsmasq iptables-persistent
 
+# --- Prevent NetworkManager from managing the interface ---
+echo "Configuring NetworkManager to ignore ${PI_INTERFACE}..."
+NM_CONF_FILE="/etc/NetworkManager/conf.d/99-unmanaged-devices.conf"
+mkdir -p /etc/NetworkManager/conf.d/
+cat << EOF > "${NM_CONF_FILE}"
+[keyfile]
+unmanaged-devices=interface-name:${PI_INTERFACE}
+EOF
+echo "Reloading NetworkManager configuration..."
+systemctl reload NetworkManager || echo "NetworkManager might not be running."
+sleep 2
+
 # Unmask and enable hostapd (fix common issue)
 systemctl unmask hostapd 2>/dev/null || true
 
 # Stop and disable any conflicting services
-echo "Stopping any existing WiFi services..."
+echo "Stopping and disabling potentially conflicting services (wpa_supplicant, hostapd)..."
 systemctl stop hostapd 2>/dev/null || true
-systemctl stop wpa_supplicant 2>/dev/null || true 
+systemctl disable hostapd 2>/dev/null || true # Disable it initially, we start it manually
+systemctl stop wpa_supplicant 2>/dev/null || true
+systemctl disable wpa_supplicant 2>/dev/null || true # Crucial to prevent interference
 killall hostapd 2>/dev/null || true
 killall wpa_supplicant 2>/dev/null || true
-sleep 1
+sleep 2 # Increased delay
 
 # More aggressively reset the WiFi interface
 echo "Resetting WiFi interface ${PI_INTERFACE}..."
 ip link set ${PI_INTERFACE} down
 # Wait for interface to fully go down
-sleep 2
+sleep 3 # Increased delay
 # Bring interface back up
 ip link set ${PI_INTERFACE} up
-sleep 2
+sleep 3 # Increased delay
 
 # Check for any RF blocks
 echo "Checking for RF blocks..."
@@ -114,104 +130,128 @@ if command -v rfkill &> /dev/null; then
 fi
 
 # Try multiple configurations - create both versions then try them in sequence
-# First, create a standard hostapd configuration
-echo "Creating basic hostapd configuration..."
+# First, create a *very* basic hostapd configuration
+echo "Creating minimal hostapd configuration..."
 cat << EOF > /tmp/hostapd.conf
 interface=${PI_INTERFACE}
 driver=nl80211
 ssid=${NEW_SSID}
 hw_mode=g
 channel=6
+# Minimal required for open network
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
 wpa=0
-country_code=DE
-ieee80211d=1
-wmm_enabled=1
-beacon_int=100
 EOF
 
-# Create a more compatible version as fallback
+# Create a slightly more featured version as fallback
 echo "Creating alternative hostapd configuration..."
 cat << EOF > /tmp/hostapd_alt.conf
 interface=${PI_INTERFACE}
 driver=nl80211
 ssid=${NEW_SSID}
 hw_mode=g
-channel=1
+channel=11 # Different channel
 macaddr_acl=0
-auth_algs=3
+auth_algs=1 # Standard open auth
 ignore_broadcast_ssid=0
 wpa=0
-beacon_int=50
+# Add country code and WMM
+country_code=DE
+ieee80211d=1
+wmm_enabled=1
+beacon_int=100
 EOF
 
 # Try to ensure the adapter is in the right mode
 echo "Making sure WiFi interface is in AP mode..."
 iw dev ${PI_INTERFACE} set type __ap || echo "Could not set AP mode (might already be in AP mode)"
 
-# First attempt with standard config
-echo "Starting hostapd with standard configuration..."
-if ! hostapd -dd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1; then
-    echo "First hostapd attempt failed, trying alternative configuration..."
-    
-    # Try the alternative configuration
-    if ! hostapd -dd -B /tmp/hostapd_alt.conf >> /tmp/hostapd.log 2>&1; then
-        echo "Alternative hostapd configuration failed too."
-        
-        # Try with yet another channel
-        echo "Trying with channel 11..."
-        sed -i 's/channel=1/channel=11/' /tmp/hostapd_alt.conf
-        
-        if ! hostapd -dd -B /tmp/hostapd_alt.conf >> /tmp/hostapd.log 2>&1; then
-            echo "All direct hostapd attempts failed, trying NetworkManager fallback method..."
-            
-            # Kill hostapd if it's running
-            killall hostapd 2>/dev/null || true
-            
-            # Try creating a hotspot through NetworkManager as fallback
-            echo "Attempting to create hotspot via NetworkManager..."
-            # Create a basic connection
-            nmcli con add type wifi ifname ${PI_INTERFACE} con-name "NM-Hotspot" autoconnect yes ssid "${NEW_SSID}" || true
-            # Configure it as an access point
-            nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared || true
-            # Remove security
-            nmcli con modify "NM-Hotspot" wifi-sec.key-mgmt none || true
-            # Set higher power
-            nmcli con modify "NM-Hotspot" 802-11-wireless.tx-power 100 || true
-            # Try multiple channels
-            for channel in 1 6 11; do
-                echo "Trying NetworkManager with channel $channel..."
-                nmcli con modify "NM-Hotspot" 802-11-wireless.channel $channel || true
-                # Activate it
-                if nmcli con up "NM-Hotspot"; then
-                    echo "NetworkManager hotspot activated successfully on channel $channel!"
-                    NM_CON_NAME="NM-Hotspot"
-                    break
-                fi
-            done
-            
-            if [ "$(nmcli -g GENERAL.STATE con show "NM-Hotspot" 2>/dev/null)" != "activated" ]; then
-                echo "CRITICAL: All hotspot creation methods failed. Network will not be visible."
-                echo "Try rebooting and running this script again."
-                echo "You may also need to check if your WiFi adapter supports AP mode."
-                cat /tmp/hostapd.log
-            fi
+HOSTAPD_STARTED=false
+# First attempt with minimal config
+echo "Starting hostapd with minimal configuration..."
+if hostapd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1; then
+    sleep 2 # Give it time to start
+    if pgrep -x "hostapd" > /dev/null; then
+        echo "Hostapd started successfully with minimal config."
+        HOSTAPD_STARTED=true
+    else
+        echo "Hostapd process not found after starting with minimal config. Check /tmp/hostapd.log."
+    fi
+else
+    echo "Minimal hostapd config failed to start. Check /tmp/hostapd.log."
+fi
+
+# Second attempt with alternative config if first failed
+if [ "$HOSTAPD_STARTED" = false ]; then
+    echo "Trying alternative hostapd configuration..."
+    if hostapd -B /tmp/hostapd_alt.conf >> /tmp/hostapd.log 2>&1; then
+        sleep 2 # Give it time to start
+        if pgrep -x "hostapd" > /dev/null; then
+            echo "Hostapd started successfully with alternative config."
+            HOSTAPD_STARTED=true
+        else
+            echo "Hostapd process not found after starting with alternative config. Check /tmp/hostapd.log."
         fi
+    else
+        echo "Alternative hostapd config also failed to start. Check /tmp/hostapd.log."
+    fi
+fi
+
+# Fallback to NetworkManager ONLY if hostapd failed completely
+if [ "$HOSTAPD_STARTED" = false ]; then
+    echo "All direct hostapd attempts failed. Re-enabling NetworkManager control for ${PI_INTERFACE} and trying NM hotspot..."
+
+    # Remove the unmanaged device configuration
+    rm -f "${NM_CONF_FILE}"
+    echo "Reloading NetworkManager configuration..."
+    systemctl reload NetworkManager || echo "NetworkManager might not be running."
+    sleep 2
+    # Ensure interface is managed again
+    nmcli device set ${PI_INTERFACE} managed yes || echo "Failed to set device to managed."
+    sleep 2
+
+    # Try creating a hotspot through NetworkManager as fallback
+    echo "Attempting to create hotspot via NetworkManager..."
+    # Create a basic connection
+    nmcli con add type wifi ifname ${PI_INTERFACE} con-name "NM-Hotspot" autoconnect yes ssid "${NEW_SSID}" || true
+    # Configure it as an access point
+    nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared || true
+    # Remove security
+    nmcli con modify "NM-Hotspot" wifi-sec.key-mgmt none || true
+    # Set higher power
+    nmcli con modify "NM-Hotspot" 802-11-wireless.tx-power 100 || true
+    # Try multiple channels
+    for channel in 1 6 11; do
+        echo "Trying NetworkManager with channel $channel..."
+        nmcli con modify "NM-Hotspot" 802-11-wireless.channel $channel || true
+        # Activate it
+        if nmcli con up "NM-Hotspot"; then
+            echo "NetworkManager hotspot activated successfully on channel $channel!"
+            NM_CON_NAME="NM-Hotspot"
+            HOSTAPD_STARTED=true # Mark as started via NM
+            break
+        fi
+    done
+
+    if [ "$HOSTAPD_STARTED" = false ]; then
+        echo "CRITICAL: All hotspot creation methods failed. Network will not be visible."
+        echo "Try rebooting and running this script again."
+        echo "You may also need to check if your WiFi adapter supports AP mode."
+        echo "Check hostapd log: /tmp/hostapd.log"
+        echo "Check NetworkManager logs: journalctl -u NetworkManager"
     fi
 fi
 
 sleep 3
 
-# Verify hostapd is running
+# Verify hostapd or NM hotspot is running
 if ! pgrep hostapd > /dev/null && [ "$(nmcli -g GENERAL.STATE con show "NM-Hotspot" 2>/dev/null)" != "activated" ]; then
     echo "WARNING: Neither hostapd nor NetworkManager hotspot appears to be running!"
     echo "Detailed hostapd log:"
-    cat /tmp/hostapd.log
-    echo "Attempted recovery by enabling hostapd service..."
-    systemctl enable hostapd
-    systemctl restart hostapd
+    cat /tmp/hostapd.log || echo "No hostapd log found."
+    # No recovery attempt here as previous steps failed
 fi
 
 # Show informative messages
@@ -224,20 +264,30 @@ echo "4. Try moving closer to the Raspberry Pi"
 echo "5. Check /tmp/hostapd.log for errors"
 echo "==============================="
 
-# Configure the interface with static IP
-echo "Setting static IP on ${PI_INTERFACE}..."
-ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
-ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
-ip link set ${PI_INTERFACE} up
+# Configure the interface with static IP only if AP started
+if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "Setting static IP on ${PI_INTERFACE}..."
+    ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
+    ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
+    ip link set ${PI_INTERFACE} up
 
-# Status check
-echo "Network interface status:"
-ip addr show ${PI_INTERFACE}
-iwconfig ${PI_INTERFACE} || true
+    # Status check
+    echo "Network interface status:"
+    ip addr show ${PI_INTERFACE}
+    iwconfig ${PI_INTERFACE} || true
 
-NM_CON_NAME="hostapd-${PI_INTERFACE}"
-echo "[Step 1] WiFi hotspot '${NEW_SSID}' created successfully."
-sleep 3 # Wait for network to potentially stabilize
+    # Set NM_CON_NAME based on which method worked
+    if pgrep hostapd > /dev/null; then
+        NM_CON_NAME="hostapd-${PI_INTERFACE}" # Indicate hostapd is managing
+    elif [ "$(nmcli -g GENERAL.STATE con show "NM-Hotspot" 2>/dev/null)" = "activated" ]; then
+        NM_CON_NAME="NM-Hotspot" # Indicate NM is managing
+    fi
+
+    echo "[Step 1] WiFi hotspot '${NEW_SSID}' creation attempt finished."
+    sleep 3 # Wait for network to potentially stabilize
+else
+    echo "[Step 1] WiFi hotspot creation FAILED. Skipping IP configuration."
+fi
 
 # --- Step 2: Install Required Packages ---
 echo "[Step 2] Configuring iptables-persistent..."
@@ -246,19 +296,20 @@ echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-
 echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
 
 # --- Step 3: Configure dnsmasq ---
-echo "[Step 3] Configuring dnsmasq (/etc/dnsmasq.conf)..."
-DNSMASQ_CONF="/etc/dnsmasq.conf"
-DNSMASQ_CONF_BAK="${DNSMASQ_CONF}.$(date +%F-%H%M%S).bak"
+if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "[Step 3] Configuring dnsmasq (/etc/dnsmasq.conf)..."
+    DNSMASQ_CONF="/etc/dnsmasq.conf"
+    DNSMASQ_CONF_BAK="${DNSMASQ_CONF}.$(date +%F-%H%M%S).bak"
 
-# Backup existing config
-if [ -f "$DNSMASQ_CONF" ]; then
-    echo "Backing up existing ${DNSMASQ_CONF} to ${DNSMASQ_CONF_BAK}"
-    cp "$DNSMASQ_CONF" "$DNSMASQ_CONF_BAK"
-fi
+    # Backup existing config
+    if [ -f "$DNSMASQ_CONF" ]; then
+        echo "Backing up existing ${DNSMASQ_CONF} to ${DNSMASQ_CONF_BAK}"
+        cp "$DNSMASQ_CONF" "$DNSMASQ_CONF_BAK"
+    fi
 
-# Create the new dnsmasq configuration file
-# Overwrites existing file!
-cat << EOF > "$DNSMASQ_CONF"
+    # Create the new dnsmasq configuration file
+    # Overwrites existing file!
+    cat << EOF > "$DNSMASQ_CONF"
 # Configuration for dnsmasq generated by script
 # Interface to listen on
 interface=${PI_INTERFACE}
@@ -278,16 +329,16 @@ bogus-priv
 # cache-size=1000
 EOF
 
-# Add DHCP configuration if enabled
-if [ "$ENABLE_DHCP" = "true" ]; then
-    echo "[Step 3] Adding DHCP configuration to dnsmasq..."
-    # Derive subnet mask from prefix (basic implementation for /24) - Improve if other prefixes needed
-    SUBNET_MASK="255.255.255.0"
-    if [ "$PI_IP_PREFIX" != "24" ]; then
-      echo "Warning: Script currently assumes /24 prefix for DHCP subnet mask. Adjust manually if needed."
-      # Add more complex prefix-to-mask logic here if necessary
-    fi
-    cat << EOF >> "$DNSMASQ_CONF"
+    # Add DHCP configuration if enabled
+    if [ "$ENABLE_DHCP" = "true" ]; then
+        echo "[Step 3] Adding DHCP configuration to dnsmasq..."
+        # Derive subnet mask from prefix (basic implementation for /24) - Improve if other prefixes needed
+        SUBNET_MASK="255.255.255.0"
+        if [ "$PI_IP_PREFIX" != "24" ]; then
+          echo "Warning: Script currently assumes /24 prefix for DHCP subnet mask. Adjust manually if needed."
+          # Add more complex prefix-to-mask logic here if necessary
+        fi
+        cat << EOF >> "$DNSMASQ_CONF"
 # --- DHCP Settings ---
 dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},${SUBNET_MASK},${DHCP_LEASE_TIME}
 dhcp-option=option:router,${PI_STATIC_IP}
@@ -295,44 +346,60 @@ dhcp-option=option:dns-server,${PI_STATIC_IP}
 # Optional: Set local domain
 # domain=lan
 EOF
-else
-    echo "[Step 3] DHCP server disabled in configuration."
-fi
+    else
+        echo "[Step 3] DHCP server disabled in configuration."
+    fi
 
-echo "[Step 3] dnsmasq configuration written to ${DNSMASQ_CONF}"
+    echo "[Step 3] dnsmasq configuration written to ${DNSMASQ_CONF}"
+else
+    echo "[Step 3] Skipping dnsmasq configuration as hotspot failed."
+fi
 
 # --- Step 4: Stop Conflicting Services & Restart dnsmasq ---
-echo "[Step 4] Stopping systemd-resolved (if active)..."
-if systemctl is-active --quiet systemd-resolved; then
-    systemctl stop systemd-resolved
-    systemctl disable systemd-resolved
-    echo "systemd-resolved stopped and disabled."
+if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "[Step 4] Stopping systemd-resolved (if active)..."
+    if systemctl is-active --quiet systemd-resolved; then
+        systemctl stop systemd-resolved
+        systemctl disable systemd-resolved
+        echo "systemd-resolved stopped and disabled."
+    else
+        echo "systemd-resolved was not active."
+    fi
+
+    # Optional: Force update /etc/resolv.conf for the Pi itself
+    # echo "nameserver ${PI_DNS_SERVERS//,/$'\n'}" > /etc/resolv.conf # More robust way needed potentially
+
+    echo "[Step 4] Restarting and enabling dnsmasq service..."
+    systemctl restart dnsmasq
+    systemctl enable dnsmasq
+    echo "[Step 4] dnsmasq service restarted and enabled."
+    sleep 2 # Wait for service
 else
-    echo "systemd-resolved was not active."
+    echo "[Step 4] Skipping dnsmasq restart as hotspot failed."
 fi
 
-# Optional: Force update /etc/resolv.conf for the Pi itself
-# echo "nameserver ${PI_DNS_SERVERS//,/$'\n'}" > /etc/resolv.conf # More robust way needed potentially
-
-echo "[Step 4] Restarting and enabling dnsmasq service..."
-systemctl restart dnsmasq
-systemctl enable dnsmasq
-echo "[Step 4] dnsmasq service restarted and enabled."
-sleep 2 # Wait for service
-
 # --- Step 5: Configure iptables Rules ---
-echo "[Step 5] Configuring iptables redirect rules (Ports 80,443 -> ${TARGET_PORT})..."
-# Add rules to redirect web traffic to captive portal
-echo "Adding iptables rule for HTTP (port 80) → port ${TARGET_PORT}..."
-iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port ${TARGET_PORT}
-echo "Adding iptables rule for HTTPS (port 443) → port 3443..."
-iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
+if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "[Step 5] Configuring iptables redirect rules (Ports 80,443 -> ${TARGET_PORT})..."
+    # Add rules to redirect web traffic to captive portal
+    echo "Adding iptables rule for HTTP (port 80) → port ${TARGET_PORT}..."
+    iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port ${TARGET_PORT}
+    echo "Adding iptables rule for HTTPS (port 443) → port 3443..."
+    iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
+else
+    echo "[Step 5] Skipping iptables configuration as hotspot failed."
+fi
 
 # --- Step 6: Make iptables Rules Persistent ---
-echo "[Step 6] Saving iptables rules..."
-netfilter-persistent save
+if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "[Step 6] Saving iptables rules..."
+    netfilter-persistent save
+else
+    echo "[Step 6] Skipping iptables save as hotspot failed."
+fi
 
 # --- Step 7: Fix dnsmasq Startup Timing Issues ---
+# This part should still be configured regardless, as it might help on reboot
 echo "[Step 7] Fixing dnsmasq startup timing issues..."
 # Create NetworkManager dispatcher script to restart dnsmasq when wlan1 comes up
 echo "Creating NetworkManager dispatcher script..."
@@ -367,6 +434,7 @@ EOF
 systemctl daemon-reload
 
 # --- Step 8: Generate SSL certificates for HTTPS ---
+# This can also run regardless
 echo "[Step 8] Generating self-signed SSL certificates..."
 CERT_DIR="certificates"
 if [ ! -d "$CERT_DIR" ]; then
@@ -394,23 +462,38 @@ chmod 600 "$CERT_DIR/key.pem"   # Only owner can read the private key
 
 # --- Step 9: Completion ---
 echo ""
-echo "--- Setup Complete! ---"
+echo "--- Setup Finished ---"
 echo ""
 echo "Summary:"
-echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured on interface ${PI_INTERFACE} (via NM connection '${NM_CON_NAME}')."
-echo "* dnsmasq installed and configured to resolve all DNS to ${PI_STATIC_IP}."
-if [ "$ENABLE_DHCP" = "true" ]; then
-    echo "* dnsmasq DHCP server enabled for range ${DHCP_RANGE_START}-${DHCP_RANGE_END}."
+if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "* WiFi Hotspot Status: STARTED (using ${NM_CON_NAME})"
+    echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured on interface ${PI_INTERFACE}."
+    echo "* dnsmasq installed and configured to resolve all DNS to ${PI_STATIC_IP}."
+    if [ "$ENABLE_DHCP" = "true" ]; then
+        echo "* dnsmasq DHCP server enabled for range ${DHCP_RANGE_START}-${DHCP_RANGE_END}."
+    fi
+    echo "* iptables rules added to redirect HTTP traffic (port 80) to port 3000 and HTTPS traffic (port 443) to port 3443."
+    echo "* iptables rules should be persistent across reboots."
+else
+    echo "* WiFi Hotspot Status: FAILED TO START"
+    echo "* Static IP configuration SKIPPED."
+    echo "* dnsmasq configuration SKIPPED."
+    echo "* iptables configuration SKIPPED."
+    echo "* Please check logs: /tmp/hostapd.log and journalctl -u NetworkManager"
 fi
-echo "* iptables rules added to redirect HTTP traffic (port 80) to port 3000 and HTTPS traffic (port 443) to port 3443."
-echo "* iptables rules should be persistent across reboots."
 echo "* Added fixes for dnsmasq startup timing issues (NetworkManager dispatcher + service delay)."
 echo ""
 echo "Next Steps:"
-echo "1.  Ensure your web application is running on the Pi and listening on port ${TARGET_PORT}."
-echo "2.  Connect client devices to the ${PI_INTERFACE} network."
-echo "3.  Clients should get DNS/IP automatically (if DHCP enabled) or configure them manually to use ${PI_STATIC_IP} as DNS."
-echo "4.  Test DNS resolution and HTTP access (e.g., http://example.com) from a client device."
-echo "5.  A reboot (sudo reboot) is recommended to verify all changes work properly."
+if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "1.  Ensure your web application is running on the Pi and listening on port ${TARGET_PORT}."
+    echo "2.  Connect client devices to the '${NEW_SSID}' network."
+    echo "3.  Clients should get DNS/IP automatically (if DHCP enabled) or configure them manually to use ${PI_STATIC_IP} as DNS."
+    echo "4.  Test DNS resolution and HTTP access (e.g., http://example.com) from a client device."
+    echo "5.  A reboot (sudo reboot) is recommended to verify all changes work properly."
+else
+    echo "1.  Troubleshoot the hotspot failure based on the logs provided."
+    echo "2.  Verify WiFi adapter compatibility and driver status."
+    echo "3.  Consider trying a different WiFi adapter."
+fi
 echo ""
-exit 0
+exit 0 # Exit cleanly even on failure, summary indicates status
