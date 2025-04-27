@@ -98,6 +98,9 @@ unmanaged-devices=interface-name:${PI_INTERFACE}
 EOF
     echo "Reloading NetworkManager configuration..."
     systemctl reload NetworkManager || echo "NetworkManager might not be running."
+    # Ensure system dnsmasq is enabled when hostapd service manages the AP
+    echo "Ensuring system dnsmasq service is enabled (hostapd mode)..."
+    systemctl enable dnsmasq || echo "Failed to enable dnsmasq."
     sleep 2
 }
 configure_nm_managed() {
@@ -110,6 +113,10 @@ configure_nm_managed() {
     fi
     # Ensure interface is managed again
     nmcli device set ${PI_INTERFACE} managed yes || echo "Failed to set device ${PI_INTERFACE} to managed."
+    # Disable system dnsmasq when NetworkManager shared mode manages the AP/DHCP
+    echo "Disabling system dnsmasq service (NetworkManager mode)..."
+    systemctl disable dnsmasq || echo "Failed to disable dnsmasq."
+    systemctl stop dnsmasq || echo "dnsmasq was not running."
     sleep 2
 }
 
@@ -250,7 +257,7 @@ if [ -n "$SUCCESSFUL_HOSTAPD_CONF" ]; then
     # Add the new line
     echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
 
-    # 3. Ensure NetworkManager ignores the interface
+    # 3. Ensure NetworkManager ignores the interface AND system dnsmasq is enabled
     configure_nm_unmanaged
 
     # 4. Enable and start the hostapd service
@@ -274,7 +281,7 @@ else
     echo "Direct hostapd attempts failed. Trying NetworkManager hotspot fallback..."
     HOSTAPD_METHOD="nmcli"
 
-    # Ensure NetworkManager is managing the interface
+    # Ensure NetworkManager is managing the interface AND system dnsmasq is disabled
     configure_nm_managed
 
     # Ensure hostapd service is disabled if we are using NM
@@ -286,8 +293,8 @@ else
     echo "Attempting to create hotspot via NetworkManager..."
     # Create a basic connection
     nmcli con add type wifi ifname ${PI_INTERFACE} con-name "NM-Hotspot" autoconnect yes ssid "${NEW_SSID}" || true
-    # Configure it as an access point
-    nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared || true
+    # Configure it as an access point with SHARED IP (NM handles DHCP/DNS)
+    nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared ipv4.addresses "${PI_STATIC_IP}/${PI_IP_PREFIX}" ipv4.gateway "${PI_STATIC_IP}" || true
     # Remove security
     nmcli con modify "NM-Hotspot" wifi-sec.key-mgmt none || true
     # Set higher power
@@ -345,16 +352,18 @@ else
      cat /tmp/hostapd.log || echo "No hostapd log found."
 fi
 
-# Configure the interface with static IP only if AP started
+# Configure the interface with static IP only if AP started AND hostapd service method is used
 if [ "$HOSTAPD_STARTED" = true ]; then
-    echo "Setting static IP on ${PI_INTERFACE}..."
-    # If using NM shared mode, NM might handle IP. If using hostapd service, we need to set it.
-    # Let's try setting it always, but be aware NM might override if in shared mode.
-    # A better approach for NM might be to configure the static IP within the NM connection profile.
-    # For now, we proceed with manual IP setting.
-    ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
-    ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
-    ip link set ${PI_INTERFACE} up
+    if [ "$HOSTAPD_METHOD" = "service" ]; then
+        echo "Setting static IP on ${PI_INTERFACE} (hostapd service mode)..."
+        ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
+        ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
+        ip link set ${PI_INTERFACE} up
+        sleep 2 # Give IP time to settle
+    else
+         echo "Skipping manual static IP configuration (${HOSTAPD_METHOD} mode handles it)."
+         # NM in shared mode should configure the IP based on ipv4.addresses setting above
+    fi
 
     # Status check
     echo "Network interface status:"
@@ -374,8 +383,9 @@ echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-
 echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
 
 # --- Step 3: Configure dnsmasq ---
-if [ "$HOSTAPD_STARTED" = true ]; then
-    echo "[Step 3] Configuring dnsmasq (/etc/dnsmasq.conf)..."
+# Only configure system dnsmasq if hostapd service method is used
+if [ "$HOSTAPD_STARTED" = true ] && [ "$HOSTAPD_METHOD" = "service" ]; then
+    echo "[Step 3] Configuring system dnsmasq (/etc/dnsmasq.conf) for hostapd mode..."
     DNSMASQ_CONF="/etc/dnsmasq.conf"
     DNSMASQ_CONF_BAK="${DNSMASQ_CONF}.$(date +%F-%H%M%S).bak"
 
@@ -446,12 +456,15 @@ EOF
     fi
 
     echo "[Step 3] dnsmasq configuration written to ${DNSMASQ_CONF}"
+elif [ "$HOSTAPD_STARTED" = true ] && [ "$HOSTAPD_METHOD" = "nmcli" ]; then
+    echo "[Step 3] Skipping system dnsmasq configuration (NetworkManager shared mode handles DHCP/DNS)."
 else
     echo "[Step 3] Skipping dnsmasq configuration as hotspot failed."
 fi
 
 # --- Step 4: Stop Conflicting Services & Restart dnsmasq ---
-if [ "$HOSTAPD_STARTED" = true ]; then
+# Only manage system dnsmasq if hostapd service method is used
+if [ "$HOSTAPD_STARTED" = true ] && [ "$HOSTAPD_METHOD" = "service" ]; then
     echo "[Step 4] Stopping systemd-resolved (if active)..."
     if systemctl is-active --quiet systemd-resolved; then
         systemctl stop systemd-resolved
@@ -464,35 +477,66 @@ if [ "$HOSTAPD_STARTED" = true ]; then
     # Optional: Force update /etc/resolv.conf for the Pi itself
     # echo "nameserver ${PI_DNS_SERVERS//,/$'\n'}" > /etc/resolv.conf # More robust way needed potentially
 
-    echo "[Step 4] Restarting and enabling dnsmasq service..."
+    echo "[Step 4] Restarting and enabling system dnsmasq service (hostapd mode)..."
     systemctl restart dnsmasq
-    systemctl enable dnsmasq
-    echo "[Step 4] dnsmasq service restarted and enabled."
+    # Enable is handled in configure_nm_unmanaged now
+    # systemctl enable dnsmasq
+    echo "[Step 4] dnsmasq service restarted."
     sleep 3 # Wait longer for service
     echo "[Step 4] Checking dnsmasq status..."
     systemctl status dnsmasq --no-pager || echo "Warning: dnsmasq status check failed."
     echo "[Step 4] Checking dnsmasq listeners (should be on ${PI_STATIC_IP}:53)..."
     ss -tulnp | grep ':53 ' | grep dnsmasq || echo "Warning: dnsmasq does not seem to be listening on port 53."
+    echo "[Step 4] Checking dnsmasq DHCP listeners (should be on 0.0.0.0:67)..."
+    ss -tulnp | grep ':67 ' | grep dnsmasq || echo "Warning: dnsmasq does not seem to be listening on port 67 for DHCP."
+
+elif [ "$HOSTAPD_STARTED" = true ] && [ "$HOSTAPD_METHOD" = "nmcli" ]; then
+     echo "[Step 4] Skipping system dnsmasq restart (NetworkManager handles DHCP/DNS)."
+     # NM might start its own dnsmasq instance, check for that
+     echo "[Step 4] Checking for any dnsmasq listeners (NM might run one)..."
+     ss -tulnp | grep ':53 ' | grep dnsmasq || echo "Info: No dnsmasq listening on port 53 found."
+     ss -tulnp | grep ':67 ' | grep dnsmasq || echo "Info: No dnsmasq listening on port 67 found (NM might use internal DHCP)."
 else
     echo "[Step 4] Skipping dnsmasq restart as hotspot failed."
 fi
 
 # --- Step 5: Configure iptables Rules ---
 if [ "$HOSTAPD_STARTED" = true ]; then
-    echo "[Step 5] Clearing previous NAT rules..."
+    echo "[Step 5] Clearing previous NAT and INPUT rules for ${PI_INTERFACE}..."
     # Flush existing PREROUTING rules first to avoid duplicates
-    iptables -t nat -F PREROUTING || echo "Warning: Failed to flush PREROUTING chain."
+    iptables -t nat -F PREROUTING || echo "Warning: Failed to flush NAT PREROUTING chain."
+    # Flush potentially relevant INPUT rules (be careful not to lock yourself out if using SSH over this interface)
+    iptables -F INPUT || echo "Warning: Failed to flush INPUT chain. This might drop existing connections."
     # Optionally flush OUTPUT if the Pi itself should also be redirected (less common need)
     # iptables -t nat -F OUTPUT || echo "Warning: Failed to flush OUTPUT chain."
-    
-    # --- Add Redirect Rules ---
+
+    # --- Add INPUT Rules (Allow DHCP, DNS, HTTP/S) ---
+    echo "Adding iptables rule to allow established connections..."
+    iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    echo "Adding iptables rule to allow loopback traffic..."
+    iptables -A INPUT -i lo -j ACCEPT
+    echo "Adding iptables rule for incoming DHCP requests (UDP 67/68) on ${PI_INTERFACE}..."
+    iptables -A INPUT -i ${PI_INTERFACE} -p udp --dport 67 -j ACCEPT
+    iptables -A INPUT -i ${PI_INTERFACE} -p udp --dport 68 -j ACCEPT
+    echo "Adding iptables rule for incoming DNS requests (UDP/TCP 53) on ${PI_INTERFACE}..."
+    iptables -A INPUT -i ${PI_INTERFACE} -p udp --dport 53 -j ACCEPT
+    iptables -A INPUT -i ${PI_INTERFACE} -p tcp --dport 53 -j ACCEPT
+    echo "Adding iptables rule for incoming HTTP requests (TCP ${TARGET_PORT}) on ${PI_INTERFACE}..."
+    iptables -A INPUT -i ${PI_INTERFACE} -p tcp --dport ${TARGET_PORT} -j ACCEPT
+    echo "Adding iptables rule for incoming HTTPS requests (TCP 3443) on ${PI_INTERFACE}..."
+    iptables -A INPUT -i ${PI_INTERFACE} -p tcp --dport 3443 -j ACCEPT
+
+    # --- Add Redirect Rules (NAT Table) ---
     echo "Adding iptables rule for HTTP (port 80) -> port ${TARGET_PORT}..."
     iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port ${TARGET_PORT}
     echo "Adding iptables rule for HTTPS (port 443) -> port 3443..."
     iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
-    echo "[Step 5] iptables redirect rules configured."
+
+    echo "[Step 5] iptables rules configured."
+    echo "[Step 5] Current INPUT rules:"
+    iptables -L INPUT -nv || echo "Warning: Failed to list iptables INPUT rules."
     echo "[Step 5] Current NAT PREROUTING rules:"
-    iptables -t nat -L PREROUTING -nv || echo "Warning: Failed to list iptables rules."
+    iptables -t nat -L PREROUTING -nv || echo "Warning: Failed to list iptables NAT rules."
 else
     echo "[Step 5] Skipping iptables configuration as hotspot failed."
 fi
@@ -529,18 +573,10 @@ EOF
 chmod +x /etc/NetworkManager/dispatcher.d/99-restart-dnsmasq
 
 # Also modify dnsmasq.service to wait for network and potentially hostapd
-echo "Modifying dnsmasq service to wait for network services..."
+echo "Modifying dnsmasq service to wait for network services and bind to interface..."
 mkdir -p /etc/systemd/system/dnsmasq.service.d/
-cat << EOF > /etc/systemd/system/dnsmasq.service.d/override.conf
-[Unit]
-# Wait for general network readiness and specific services that might bring up the interface
-Wants=network-online.target hostapd.service NetworkManager.service
-After=network-online.target hostapd.service NetworkManager.service
-
-[Service]
-# Add a delay before starting dnsmasq to allow the interface IP to settle
-ExecStartPre=/bin/sleep 10
-EOF
+# Use printf to handle the interface name correctly in the unit file content
+printf "[Unit]\n# Wait for general network readiness and specific services\n# Bind dnsmasq lifecycle to the specific network device\nWants=network-online.target\nAfter=network-online.target NetworkManager.service hostapd.service\nBindsTo=sys-subsystem-net-devices-%s.device\nAfter=sys-subsystem-net-devices-%s.device\n\n[Service]\n# Add a delay before starting dnsmasq\nExecStartPre=/bin/sleep 10\n" "${PI_INTERFACE}" "${PI_INTERFACE}" > /etc/systemd/system/dnsmasq.service.d/override.conf
 
 # Reload systemd to apply changes
 systemctl daemon-reload
@@ -580,14 +616,20 @@ echo "Summary:"
 if [ "$HOSTAPD_STARTED" = true ]; then
     echo "* WiFi Hotspot Status: STARTED (using ${HOSTAPD_METHOD})"
     echo "* Persistence: Configured to start automatically on reboot."
-    echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured on interface ${PI_INTERFACE}."
-    echo "* dnsmasq configured for DHCP (if enabled) and DNS."
-    echo "*   - Standard DNS uses upstream servers: ${PI_DNS_SERVERS}"
-    echo "*   - Connectivity check domains redirected to ${PI_STATIC_IP} to potentially bypass captive portal prompts."
-    if [ "$ENABLE_DHCP" = "true" ]; then
-        echo "* dnsmasq DHCP server enabled for range ${DHCP_RANGE_START}-${DHCP_RANGE_END}."
+    if [ "$HOSTAPD_METHOD" = "service" ]; then
+        echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured manually on interface ${PI_INTERFACE}."
+        echo "* System dnsmasq configured for DHCP (if enabled) and DNS."
+        echo "*   - Standard DNS uses upstream servers: ${PI_DNS_SERVERS}"
+        echo "*   - Connectivity check domains redirected to ${PI_STATIC_IP}."
+        if [ "$ENABLE_DHCP" = "true" ]; then
+            echo "*   - System dnsmasq DHCP server enabled for range ${DHCP_RANGE_START}-${DHCP_RANGE_END}."
+        fi
+    else # nmcli method
+        echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured via NetworkManager shared mode."
+        echo "* NetworkManager internal mechanisms handle DHCP/DNS for clients."
+        echo "* System dnsmasq service is disabled."
     fi
-    echo "* iptables rules redirect HTTP(S) traffic (ports 80/443) to local ports ${TARGET_PORT}/3443."
+    echo "* iptables rules allow DHCP/DNS/HTTP/HTTPS and redirect HTTP(S) traffic (ports 80/443) to local ports ${TARGET_PORT}/3443."
     echo "* iptables rules should be persistent across reboots."
 else
     echo "* WiFi Hotspot Status: FAILED TO START"
