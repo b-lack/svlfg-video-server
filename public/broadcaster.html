@@ -18,8 +18,23 @@
       document.body.innerHTML += '<p class="error">This application requires secure context (HTTPS) to access camera and microphone. Please access this page via a secure URL.</p>';
     } else {
 
-      // Get webcam stream
-      navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      // Define desired media constraints
+      // You might need to adjust these based on your action camera's capabilities
+      // To select a specific camera, you would first use navigator.mediaDevices.enumerateDevices()
+      // to get the deviceId and then specify it here, e.g., video: { deviceId: { exact: 'your_camera_device_id' } }
+      // However, most browsers will prompt the user to choose if multiple cameras are available.
+      const constraints = {
+        video: {
+          // Example constraints: request a higher resolution
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          // You could add frameRate, facingMode etc. here
+        },
+        audio: true // Keep audio constraint or adjust as needed
+      };
+
+      // Get webcam/actioncam stream using the defined constraints
+      navigator.mediaDevices.getUserMedia(constraints)
         .then(stream => {
           video.srcObject = stream;
           socket.emit('broadcaster');
@@ -58,7 +73,12 @@
         })
         .catch(error => {
           console.error('Error accessing media devices:', error);
-          alert('Error accessing camera: ' + error.message);
+          // Provide more specific feedback if constraints fail
+          if (error.name === 'OverconstrainedError') {
+            alert(`The requested resolution or constraints are not supported by your camera. Error: ${error.message}`);
+          } else {
+            alert('Error accessing camera: ' + error.message);
+          }
         });
       }
   </script>

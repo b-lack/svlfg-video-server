@@ -87,28 +87,42 @@ echo "Installing required packages..."
 apt-get update
 apt-get install -y hostapd dnsmasq iptables-persistent
 
-# --- Prevent NetworkManager from managing the interface ---
-echo "Configuring NetworkManager to ignore ${PI_INTERFACE}..."
+# --- Configure NetworkManager to ignore interface IF hostapd method works ---
 NM_CONF_FILE="/etc/NetworkManager/conf.d/99-unmanaged-devices.conf"
 mkdir -p /etc/NetworkManager/conf.d/
-cat << EOF > "${NM_CONF_FILE}"
+configure_nm_unmanaged() {
+    echo "Configuring NetworkManager to ignore ${PI_INTERFACE}..."
+    cat << EOF > "${NM_CONF_FILE}"
 [keyfile]
 unmanaged-devices=interface-name:${PI_INTERFACE}
 EOF
-echo "Reloading NetworkManager configuration..."
-systemctl reload NetworkManager || echo "NetworkManager might not be running."
-sleep 2
+    echo "Reloading NetworkManager configuration..."
+    systemctl reload NetworkManager || echo "NetworkManager might not be running."
+    sleep 2
+}
+configure_nm_managed() {
+    echo "Ensuring NetworkManager manages ${PI_INTERFACE}..."
+    if [ -f "${NM_CONF_FILE}" ]; then
+        rm -f "${NM_CONF_FILE}"
+        echo "Reloading NetworkManager configuration..."
+        systemctl reload NetworkManager || echo "NetworkManager might not be running."
+        sleep 2
+    fi
+    # Ensure interface is managed again
+    nmcli device set ${PI_INTERFACE} managed yes || echo "Failed to set device ${PI_INTERFACE} to managed."
+    sleep 2
+}
 
-# Unmask and enable hostapd (fix common issue)
+# Unmask and stop hostapd (fix common issue, ensure clean state)
 systemctl unmask hostapd 2>/dev/null || true
-
-# Stop and disable any conflicting services
-echo "Stopping and disabling potentially conflicting services (wpa_supplicant, hostapd)..."
 systemctl stop hostapd 2>/dev/null || true
-systemctl disable hostapd 2>/dev/null || true # Disable it initially, we start it manually
+# We will enable it later *if* this method succeeds
+
+# Stop and disable other potentially conflicting services
+echo "Stopping and disabling potentially conflicting services (wpa_supplicant)..."
 systemctl stop wpa_supplicant 2>/dev/null || true
 systemctl disable wpa_supplicant 2>/dev/null || true # Crucial to prevent interference
-killall hostapd 2>/dev/null || true
+killall hostapd 2>/dev/null || true # Kill any lingering manual processes
 killall wpa_supplicant 2>/dev/null || true
 sleep 2 # Increased delay
 
@@ -169,48 +183,104 @@ echo "Making sure WiFi interface is in AP mode..."
 iw dev ${PI_INTERFACE} set type __ap || echo "Could not set AP mode (might already be in AP mode)"
 
 HOSTAPD_STARTED=false
+HOSTAPD_METHOD="" # Will be 'service' or 'nmcli'
+SUCCESSFUL_HOSTAPD_CONF=""
+
 # First attempt with minimal config
 echo "Starting hostapd with minimal configuration..."
-if hostapd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1; then
-    sleep 2 # Give it time to start
+if hostapd /tmp/hostapd.conf > /tmp/hostapd.log 2>&1 &
+then
+    sleep 4 # Give it more time to start
     if pgrep -x "hostapd" > /dev/null; then
-        echo "Hostapd started successfully with minimal config."
-        HOSTAPD_STARTED=true
+        echo "Hostapd started successfully with minimal config (temporarily)."
+        SUCCESSFUL_HOSTAPD_CONF="/tmp/hostapd.conf"
+        # Stop the temporary process
+        echo "Stopping temporary hostapd process..."
+        pkill hostapd
+        sleep 2
     else
         echo "Hostapd process not found after starting with minimal config. Check /tmp/hostapd.log."
+        # Ensure it's really stopped
+        pkill hostapd 2>/dev/null || true
     fi
 else
     echo "Minimal hostapd config failed to start. Check /tmp/hostapd.log."
+    pkill hostapd 2>/dev/null || true
 fi
 
 # Second attempt with alternative config if first failed
-if [ "$HOSTAPD_STARTED" = false ]; then
+if [ -z "$SUCCESSFUL_HOSTAPD_CONF" ]; then
     echo "Trying alternative hostapd configuration..."
-    if hostapd -B /tmp/hostapd_alt.conf >> /tmp/hostapd.log 2>&1; then
-        sleep 2 # Give it time to start
+    if hostapd /tmp/hostapd_alt.conf >> /tmp/hostapd.log 2>&1 &
+    then
+        sleep 4 # Give it more time to start
         if pgrep -x "hostapd" > /dev/null; then
-            echo "Hostapd started successfully with alternative config."
-            HOSTAPD_STARTED=true
+            echo "Hostapd started successfully with alternative config (temporarily)."
+            SUCCESSFUL_HOSTAPD_CONF="/tmp/hostapd_alt.conf"
+            # Stop the temporary process
+            echo "Stopping temporary hostapd process..."
+            pkill hostapd
+            sleep 2
         else
             echo "Hostapd process not found after starting with alternative config. Check /tmp/hostapd.log."
+            pkill hostapd 2>/dev/null || true
         fi
     else
         echo "Alternative hostapd config also failed to start. Check /tmp/hostapd.log."
+        pkill hostapd 2>/dev/null || true
     fi
 fi
 
-# Fallback to NetworkManager ONLY if hostapd failed completely
-if [ "$HOSTAPD_STARTED" = false ]; then
-    echo "All direct hostapd attempts failed. Re-enabling NetworkManager control for ${PI_INTERFACE} and trying NM hotspot..."
+# --- Configure Persistence Based on Success ---
 
-    # Remove the unmanaged device configuration
-    rm -f "${NM_CONF_FILE}"
-    echo "Reloading NetworkManager configuration..."
-    systemctl reload NetworkManager || echo "NetworkManager might not be running."
-    sleep 2
-    # Ensure interface is managed again
-    nmcli device set ${PI_INTERFACE} managed yes || echo "Failed to set device to managed."
-    sleep 2
+# If direct hostapd method worked, configure the service
+if [ -n "$SUCCESSFUL_HOSTAPD_CONF" ]; then
+    echo "Direct hostapd method successful. Configuring hostapd service for persistence..."
+    HOSTAPD_METHOD="service"
+
+    # 1. Copy the successful config to the default location
+    echo "Copying ${SUCCESSFUL_HOSTAPD_CONF} to /etc/hostapd/hostapd.conf..."
+    cp "${SUCCESSFUL_HOSTAPD_CONF}" /etc/hostapd/hostapd.conf
+    chmod 600 /etc/hostapd/hostapd.conf # Secure permissions
+
+    # 2. Configure /etc/default/hostapd to use the config file
+    echo "Configuring /etc/default/hostapd..."
+    # Remove existing DAEMON_CONF line if present
+    sed -i '/^DAEMON_CONF=/d' /etc/default/hostapd
+    # Add the new line
+    echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
+
+    # 3. Ensure NetworkManager ignores the interface
+    configure_nm_unmanaged
+
+    # 4. Enable and start the hostapd service
+    echo "Enabling and starting hostapd service..."
+    systemctl enable hostapd
+    systemctl restart hostapd # Use restart to ensure it picks up new config
+    sleep 5 # Give service time to start
+
+    # 5. Verify service started
+    if systemctl is-active --quiet hostapd; then
+        echo "hostapd service started successfully."
+        HOSTAPD_STARTED=true
+        NM_CON_NAME="hostapd-service" # Indicate service is managing
+    else
+        echo "ERROR: hostapd service failed to start. Check 'systemctl status hostapd' and 'journalctl -u hostapd'."
+        HOSTAPD_STARTED=false
+    fi
+
+# Fallback to NetworkManager ONLY if hostapd failed completely
+else
+    echo "Direct hostapd attempts failed. Trying NetworkManager hotspot fallback..."
+    HOSTAPD_METHOD="nmcli"
+
+    # Ensure NetworkManager is managing the interface
+    configure_nm_managed
+
+    # Ensure hostapd service is disabled if we are using NM
+    echo "Disabling hostapd service (using NetworkManager fallback)..."
+    systemctl disable hostapd 2>/dev/null || true
+    systemctl stop hostapd 2>/dev/null || true
 
     # Try creating a hotspot through NetworkManager as fallback
     echo "Attempting to create hotspot via NetworkManager..."
@@ -223,50 +293,65 @@ if [ "$HOSTAPD_STARTED" = false ]; then
     # Set higher power
     nmcli con modify "NM-Hotspot" 802-11-wireless.tx-power 100 || true
     # Try multiple channels
+    NM_HOTSPOT_UP=false
     for channel in 1 6 11; do
         echo "Trying NetworkManager with channel $channel..."
         nmcli con modify "NM-Hotspot" 802-11-wireless.channel $channel || true
         # Activate it
         if nmcli con up "NM-Hotspot"; then
             echo "NetworkManager hotspot activated successfully on channel $channel!"
-            NM_CON_NAME="NM-Hotspot"
+            NM_CON_NAME="NM-Hotspot" # Use the actual NM connection name
             HOSTAPD_STARTED=true # Mark as started via NM
+            NM_HOTSPOT_UP=true
+            # Ensure NetworkManager service is enabled for persistence
+            systemctl enable NetworkManager
             break
+        else
+            echo "Failed to bring up NM-Hotspot on channel $channel."
         fi
     done
 
-    if [ "$HOSTAPD_STARTED" = false ]; then
-        echo "CRITICAL: All hotspot creation methods failed. Network will not be visible."
+    if [ "$NM_HOTSPOT_UP" = false ]; then
+        echo "CRITICAL: All hotspot creation methods failed (direct hostapd and NetworkManager)."
+        echo "Network will not be visible."
         echo "Try rebooting and running this script again."
-        echo "You may also need to check if your WiFi adapter supports AP mode."
+        echo "You may also need to check if your WiFi adapter supports AP mode ('iw list')."
         echo "Check hostapd log: /tmp/hostapd.log"
         echo "Check NetworkManager logs: journalctl -u NetworkManager"
+        echo "Check hostapd service status: systemctl status hostapd"
+        HOSTAPD_STARTED=false
     fi
 fi
 
 sleep 3
 
-# Verify hostapd or NM hotspot is running
-if ! pgrep hostapd > /dev/null && [ "$(nmcli -g GENERAL.STATE con show "NM-Hotspot" 2>/dev/null)" != "activated" ]; then
-    echo "WARNING: Neither hostapd nor NetworkManager hotspot appears to be running!"
-    echo "Detailed hostapd log:"
-    cat /tmp/hostapd.log || echo "No hostapd log found."
-    # No recovery attempt here as previous steps failed
+# Verify hotspot is running via the chosen method
+if [ "$HOSTAPD_STARTED" = true ]; then
+    echo "Hotspot started successfully using method: ${HOSTAPD_METHOD}"
+    if [ "$HOSTAPD_METHOD" = "service" ]; then
+        if ! systemctl is-active --quiet hostapd; then
+             echo "WARNING: hostapd service method was chosen, but the service is not active!"
+             HOSTAPD_STARTED=false # Re-evaluate status
+        fi
+    elif [ "$HOSTAPD_METHOD" = "nmcli" ]; then
+        if [ "$(nmcli -g GENERAL.STATE con show "${NM_CON_NAME}" 2>/dev/null)" != "activated" ]; then
+             echo "WARNING: NetworkManager method was chosen, but connection '${NM_CON_NAME}' is not activated!"
+             HOSTAPD_STARTED=false # Re-evaluate status
+        fi
+    fi
+else
+     echo "WARNING: Hotspot failed to start using any method."
+     echo "Detailed hostapd log:"
+     cat /tmp/hostapd.log || echo "No hostapd log found."
 fi
-
-# Show informative messages
-echo "==== WiFi AP Troubleshooting ===="
-echo "If Android devices cannot see the network:"
-echo "1. Verify the WiFi adapter supports AP mode: check 'iw list' output for 'AP' in 'Supported interface modes'"
-echo "2. Try rebooting the Raspberry Pi after setup"
-echo "3. Ensure Android WiFi scanning is enabled"
-echo "4. Try moving closer to the Raspberry Pi"
-echo "5. Check /tmp/hostapd.log for errors"
-echo "==============================="
 
 # Configure the interface with static IP only if AP started
 if [ "$HOSTAPD_STARTED" = true ]; then
     echo "Setting static IP on ${PI_INTERFACE}..."
+    # If using NM shared mode, NM might handle IP. If using hostapd service, we need to set it.
+    # Let's try setting it always, but be aware NM might override if in shared mode.
+    # A better approach for NM might be to configure the static IP within the NM connection profile.
+    # For now, we proceed with manual IP setting.
     ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
     ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
     ip link set ${PI_INTERFACE} up
@@ -276,14 +361,7 @@ if [ "$HOSTAPD_STARTED" = true ]; then
     ip addr show ${PI_INTERFACE}
     iwconfig ${PI_INTERFACE} || true
 
-    # Set NM_CON_NAME based on which method worked
-    if pgrep hostapd > /dev/null; then
-        NM_CON_NAME="hostapd-${PI_INTERFACE}" # Indicate hostapd is managing
-    elif [ "$(nmcli -g GENERAL.STATE con show "NM-Hotspot" 2>/dev/null)" = "activated" ]; then
-        NM_CON_NAME="NM-Hotspot" # Indicate NM is managing
-    fi
-
-    echo "[Step 1] WiFi hotspot '${NEW_SSID}' creation attempt finished."
+    echo "[Step 1] WiFi hotspot '${NEW_SSID}' setup finished using method '${HOSTAPD_METHOD}'."
     sleep 3 # Wait for network to potentially stabilize
 else
     echo "[Step 1] WiFi hotspot creation FAILED. Skipping IP configuration."
@@ -431,6 +509,7 @@ fi
 # This part should still be configured regardless, as it might help on reboot
 echo "[Step 7] Fixing dnsmasq startup timing issues..."
 # Create NetworkManager dispatcher script to restart dnsmasq when wlan1 comes up
+# This helps if NetworkManager is managing the interface
 echo "Creating NetworkManager dispatcher script..."
 mkdir -p /etc/NetworkManager/dispatcher.d/
 cat << EOF > /etc/NetworkManager/dispatcher.d/99-restart-dnsmasq
@@ -438,8 +517,10 @@ cat << EOF > /etc/NetworkManager/dispatcher.d/99-restart-dnsmasq
 INTERFACE=\$1
 STATUS=\$2
 
-# Only restart dnsmasq when wlan1 comes up
+# Only restart dnsmasq when the specific interface comes up
 if [ "\$INTERFACE" = "${PI_INTERFACE}" ] && [ "\$STATUS" = "up" ]; then
+    # Add a small delay before restarting dnsmasq
+    sleep 5
     systemctl restart dnsmasq
 fi
 EOF
@@ -447,15 +528,17 @@ EOF
 # Make the script executable
 chmod +x /etc/NetworkManager/dispatcher.d/99-restart-dnsmasq
 
-# Also modify dnsmasq.service to wait for network
-echo "Modifying dnsmasq service to wait for network..."
+# Also modify dnsmasq.service to wait for network and potentially hostapd
+echo "Modifying dnsmasq service to wait for network services..."
 mkdir -p /etc/systemd/system/dnsmasq.service.d/
 cat << EOF > /etc/systemd/system/dnsmasq.service.d/override.conf
 [Unit]
-Wants=network-online.target
-After=network-online.target NetworkManager.service
+# Wait for general network readiness and specific services that might bring up the interface
+Wants=network-online.target hostapd.service NetworkManager.service
+After=network-online.target hostapd.service NetworkManager.service
 
 [Service]
+# Add a delay before starting dnsmasq to allow the interface IP to settle
 ExecStartPre=/bin/sleep 10
 EOF
 
@@ -495,7 +578,8 @@ echo "--- Setup Finished ---"
 echo ""
 echo "Summary:"
 if [ "$HOSTAPD_STARTED" = true ]; then
-    echo "* WiFi Hotspot Status: STARTED (using ${NM_CON_NAME})"
+    echo "* WiFi Hotspot Status: STARTED (using ${HOSTAPD_METHOD})"
+    echo "* Persistence: Configured to start automatically on reboot."
     echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured on interface ${PI_INTERFACE}."
     echo "* dnsmasq configured for DHCP (if enabled) and DNS."
     echo "*   - Standard DNS uses upstream servers: ${PI_DNS_SERVERS}"
@@ -507,6 +591,7 @@ if [ "$HOSTAPD_STARTED" = true ]; then
     echo "* iptables rules should be persistent across reboots."
 else
     echo "* WiFi Hotspot Status: FAILED TO START"
+    echo "* Persistence: Cannot be guaranteed as startup failed."
     echo "* Static IP configuration SKIPPED."
     echo "* dnsmasq configuration SKIPPED."
     echo "* iptables configuration SKIPPED."
