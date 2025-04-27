@@ -315,12 +315,20 @@ if [ "$HOSTAPD_STARTED" = true ]; then
 interface=${PI_INTERFACE}
 # Bind to only specified interface
 bind-interfaces
-# --- Captive Portal DNS Redirect Removed ---
+# --- DNS settings for local network ---
 # Standard options
 domain-needed
 bogus-priv
-# Use upstream DNS servers defined earlier
+# Use upstream DNS servers for general lookups
 server=${PI_DNS_SERVERS//,/$'\nserver='}
+# --- Intercept Connectivity Checks ---
+# Redirect specific connectivity check domains to the Pi itself
+# This helps suppress "no internet" warnings on some devices
+address=/connectivitycheck.gstatic.com/${PI_STATIC_IP}
+address=/clients3.google.com/${PI_STATIC_IP}
+address=/captive.apple.com/${PI_STATIC_IP}
+address=/www.msftconnecttest.com/${PI_STATIC_IP}
+address=/www.msftncsi.com/${PI_STATIC_IP}
 # Optionally increase cache size
 # cache-size=1000
 EOF
@@ -376,10 +384,17 @@ fi
 
 # --- Step 5: Configure iptables Rules ---
 if [ "$HOSTAPD_STARTED" = true ]; then
-    echo "[Step 5] Clearing previous NAT PREROUTING rules for ${PI_INTERFACE}..."
-    # Flush existing PREROUTING rules for the interface to avoid duplicates or conflicts
-    iptables -t nat -F PREROUTING # Be careful if other rules exist, might need more specific flushing
-    echo "[Step 5] No iptables redirect rules configured (Captive Portal Disabled)."
+    echo "[Step 5] Clearing previous NAT PREROUTING rules..."
+    # Flush existing PREROUTING rules first to avoid duplicates
+    iptables -t nat -F PREROUTING || echo "Warning: Failed to flush PREROUTING chain."
+    # --- Add Redirect Rules ---
+    # Redirect HTTP/S traffic destined for the Pi (due to DNS interception)
+    # or any other address to the local application ports.
+    echo "Adding iptables rule for HTTP (port 80) -> port ${TARGET_PORT}..."
+    iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 80 -j REDIRECT --to-port ${TARGET_PORT}
+    echo "Adding iptables rule for HTTPS (port 443) -> port 3443..."
+    iptables -t nat -A PREROUTING -i ${PI_INTERFACE} -p tcp --dport 443 -j REDIRECT --to-port 3443
+    echo "[Step 5] iptables redirect rules configured."
 else
     echo "[Step 5] Skipping iptables configuration as hotspot failed."
 fi
@@ -462,11 +477,13 @@ echo "Summary:"
 if [ "$HOSTAPD_STARTED" = true ]; then
     echo "* WiFi Hotspot Status: STARTED (using ${NM_CON_NAME})"
     echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured on interface ${PI_INTERFACE}."
-    echo "* dnsmasq installed and configured for standard DNS resolution (using ${PI_DNS_SERVERS})."
+    echo "* dnsmasq configured for DHCP (if enabled) and DNS."
+    echo "*   - Standard DNS uses upstream servers: ${PI_DNS_SERVERS}"
+    echo "*   - Connectivity check domains redirected to ${PI_STATIC_IP} to potentially reduce 'no internet' warnings."
     if [ "$ENABLE_DHCP" = "true" ]; then
         echo "* dnsmasq DHCP server enabled for range ${DHCP_RANGE_START}-${DHCP_RANGE_END}."
     fi
-    echo "* iptables rules cleared (No HTTP/HTTPS redirection - Captive Portal Disabled)."
+    echo "* iptables rules redirect HTTP(S) traffic (ports 80/443) to local ports ${TARGET_PORT}/3443."
     echo "* iptables rules should be persistent across reboots."
 else
     echo "* WiFi Hotspot Status: FAILED TO START"
@@ -479,10 +496,12 @@ echo "* Added fixes for dnsmasq startup timing issues (NetworkManager dispatcher
 echo ""
 echo "Next Steps:"
 if [ "$HOSTAPD_STARTED" = true ]; then
-    echo "1.  Ensure your web application is running on the Pi (if needed, access it via ${PI_STATIC_IP}:${TARGET_PORT})."
+    echo "1.  Ensure your web application is running on the Pi listening on port ${TARGET_PORT} (HTTP) and 3443 (HTTPS)."
+    echo "    -> IMPORTANT: To fully suppress 'no internet' warnings, your app should respond with HTTP 204 (No Content)"
+    echo "       to requests for paths like '/generate_204', '/connecttest.txt', '/ncsi.txt', or requests to the connectivity domains."
     echo "2.  Connect client devices to the '${NEW_SSID}' network."
-    echo "3.  Clients should get DNS/IP automatically (if DHCP enabled) or configure them manually to use ${PI_STATIC_IP} as DNS."
-    echo "4.  Test DNS resolution and internet access (if Pi has internet) from a client device."
+    echo "3.  Clients should get DNS/IP automatically (if DHCP enabled)."
+    echo "4.  Test access to your local application from a client device."
     echo "5.  A reboot (sudo reboot) is recommended to verify all changes work properly."
 else
     echo "1.  Troubleshoot the hotspot failure based on the logs provided."
