@@ -73,10 +73,20 @@ HOTSPOT_CON_NAME="Hotspot-${PI_INTERFACE}"
 echo "Removing any existing connection '${HOTSPOT_CON_NAME}'..."
 nmcli connection delete "${HOTSPOT_CON_NAME}" >/dev/null 2>&1 || true
 
+# Verify WiFi adapter supports AP mode
+echo "Checking if adapter supports AP mode..."
+if ! iw list | grep -q "* AP$"; then
+    echo "WARNING: This adapter might not support AP mode. Check 'iw list' output."
+    # Continue anyway in case iw reporting is incomplete
+fi
+
 # Install only the necessary packages
 echo "Installing required packages..."
 apt-get update
 apt-get install -y hostapd dnsmasq iptables-persistent
+
+# Unmask and enable hostapd (fix common issue)
+systemctl unmask hostapd 2>/dev/null || true
 
 # Stop and disable any conflicting services
 echo "Stopping any existing WiFi services..."
@@ -95,38 +105,6 @@ sleep 2
 ip link set ${PI_INTERFACE} up
 sleep 2
 
-# Create a more Android-compatible hostapd configuration
-echo "Creating hostapd configuration with enhanced Android compatibility..."
-cat << EOF > /tmp/hostapd.conf
-interface=${PI_INTERFACE}
-driver=nl80211
-ssid=${NEW_SSID}
-# Use g mode which may work better for visibility
-hw_mode=g
-# Try channel 11 which might avoid interference
-channel=11
-# Ensure open network settings
-macaddr_acl=0
-auth_algs=3
-# Make absolutely sure SSID is broadcast 
-ignore_broadcast_ssid=0
-
-# Basic settings for open network
-wpa=0
-
-# Bare minimum settings needed
-wmm_enabled=0
-ieee80211n=0
-# Increase beacon frequency for better visibility
-beacon_int=50
-
-# Try without country code which can sometimes limit broadcasting
-#country_code=DE
-#ieee80211d=1
-EOF
-
-echo "Using ultra-basic hostapd configuration for maximum compatibility"
-
 # Check for any RF blocks
 echo "Checking for RF blocks..."
 if command -v rfkill &> /dev/null; then
@@ -135,33 +113,106 @@ if command -v rfkill &> /dev/null; then
     rfkill unblock wifi
 fi
 
+# Try multiple configurations - create both versions then try them in sequence
+# First, create a standard hostapd configuration
+echo "Creating basic hostapd configuration..."
+cat << EOF > /tmp/hostapd.conf
+interface=${PI_INTERFACE}
+driver=nl80211
+ssid=${NEW_SSID}
+hw_mode=g
+channel=6
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=0
+country_code=DE
+ieee80211d=1
+wmm_enabled=1
+beacon_int=100
+EOF
+
+# Create a more compatible version as fallback
+echo "Creating alternative hostapd configuration..."
+cat << EOF > /tmp/hostapd_alt.conf
+interface=${PI_INTERFACE}
+driver=nl80211
+ssid=${NEW_SSID}
+hw_mode=g
+channel=1
+macaddr_acl=0
+auth_algs=3
+ignore_broadcast_ssid=0
+wpa=0
+beacon_int=50
+EOF
+
 # Try to ensure the adapter is in the right mode
 echo "Making sure WiFi interface is in AP mode..."
 iw dev ${PI_INTERFACE} set type __ap || echo "Could not set AP mode (might already be in AP mode)"
 
-# Start hostapd with aggressive logging
-echo "Starting hostapd with enhanced logging..."
-hostapd -dd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1 || {
-    echo "Direct hostapd failed, trying NetworkManager fallback method..."
+# First attempt with standard config
+echo "Starting hostapd with standard configuration..."
+if ! hostapd -dd -B /tmp/hostapd.conf > /tmp/hostapd.log 2>&1; then
+    echo "First hostapd attempt failed, trying alternative configuration..."
     
-    # Kill hostapd if it's running
-    killall hostapd 2>/dev/null || true
-    
-    # Try creating a hotspot through NetworkManager as fallback
-    echo "Attempting to create hotspot via NetworkManager..."
-    # Create a basic connection
-    nmcli con add type wifi ifname ${PI_INTERFACE} con-name "NM-Hotspot" autoconnect no ssid "${NEW_SSID}" || true
-    # Configure it as an access point
-    nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared || true
-    # Remove security
-    nmcli con modify "NM-Hotspot" wifi-sec.key-mgmt none || true
-    # Activate it
-    nmcli con up "NM-Hotspot" || echo "NetworkManager fallback also failed"
-    
-    NM_CON_NAME="NM-Hotspot"
-}
+    # Try the alternative configuration
+    if ! hostapd -dd -B /tmp/hostapd_alt.conf >> /tmp/hostapd.log 2>&1; then
+        echo "Alternative hostapd configuration failed too."
+        
+        # Try with yet another channel
+        echo "Trying with channel 11..."
+        sed -i 's/channel=1/channel=11/' /tmp/hostapd_alt.conf
+        
+        if ! hostapd -dd -B /tmp/hostapd_alt.conf >> /tmp/hostapd.log 2>&1; then
+            echo "All direct hostapd attempts failed, trying NetworkManager fallback method..."
+            
+            # Kill hostapd if it's running
+            killall hostapd 2>/dev/null || true
+            
+            # Try creating a hotspot through NetworkManager as fallback
+            echo "Attempting to create hotspot via NetworkManager..."
+            # Create a basic connection
+            nmcli con add type wifi ifname ${PI_INTERFACE} con-name "NM-Hotspot" autoconnect yes ssid "${NEW_SSID}" || true
+            # Configure it as an access point
+            nmcli con modify "NM-Hotspot" 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared || true
+            # Remove security
+            nmcli con modify "NM-Hotspot" wifi-sec.key-mgmt none || true
+            # Set higher power
+            nmcli con modify "NM-Hotspot" 802-11-wireless.tx-power 100 || true
+            # Try multiple channels
+            for channel in 1 6 11; do
+                echo "Trying NetworkManager with channel $channel..."
+                nmcli con modify "NM-Hotspot" 802-11-wireless.channel $channel || true
+                # Activate it
+                if nmcli con up "NM-Hotspot"; then
+                    echo "NetworkManager hotspot activated successfully on channel $channel!"
+                    NM_CON_NAME="NM-Hotspot"
+                    break
+                fi
+            done
+            
+            if [ "$(nmcli -g GENERAL.STATE con show "NM-Hotspot" 2>/dev/null)" != "activated" ]; then
+                echo "CRITICAL: All hotspot creation methods failed. Network will not be visible."
+                echo "Try rebooting and running this script again."
+                echo "You may also need to check if your WiFi adapter supports AP mode."
+                cat /tmp/hostapd.log
+            fi
+        fi
+    fi
+fi
 
 sleep 3
+
+# Verify hostapd is running
+if ! pgrep hostapd > /dev/null && [ "$(nmcli -g GENERAL.STATE con show "NM-Hotspot" 2>/dev/null)" != "activated" ]; then
+    echo "WARNING: Neither hostapd nor NetworkManager hotspot appears to be running!"
+    echo "Detailed hostapd log:"
+    cat /tmp/hostapd.log
+    echo "Attempted recovery by enabling hostapd service..."
+    systemctl enable hostapd
+    systemctl restart hostapd
+fi
 
 # Show informative messages
 echo "==== WiFi AP Troubleshooting ===="
@@ -178,6 +229,11 @@ echo "Setting static IP on ${PI_INTERFACE}..."
 ip addr flush dev ${PI_INTERFACE} 2>/dev/null || true
 ip addr add ${PI_STATIC_IP}/${PI_IP_PREFIX} dev ${PI_INTERFACE}
 ip link set ${PI_INTERFACE} up
+
+# Status check
+echo "Network interface status:"
+ip addr show ${PI_INTERFACE}
+iwconfig ${PI_INTERFACE} || true
 
 NM_CON_NAME="hostapd-${PI_INTERFACE}"
 echo "[Step 1] WiFi hotspot '${NEW_SSID}' created successfully."
