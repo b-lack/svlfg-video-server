@@ -323,12 +323,23 @@ bogus-priv
 server=${PI_DNS_SERVERS//,/$'\nserver='}
 # --- Intercept Connectivity Checks ---
 # Redirect specific connectivity check domains to the Pi itself
-# This helps suppress "no internet" warnings on some devices
+# This helps suppress "no internet" / captive portal warnings on most devices
+# Google / Android
 address=/connectivitycheck.gstatic.com/${PI_STATIC_IP}
 address=/clients3.google.com/${PI_STATIC_IP}
+address=/clients.google.com/${PI_STATIC_IP}
+address=/google.com/generate_204/${PI_STATIC_IP} # Specific path sometimes used
+# Apple / iOS / macOS
 address=/captive.apple.com/${PI_STATIC_IP}
+address=/www.apple.com/${PI_STATIC_IP}
+address=/www.appleiphonecell.com/${PI_STATIC_IP}
+address=/airport.us/${PI_STATIC_IP}
+address=/ibook.info/${PI_STATIC_IP}
+# Microsoft / Windows
 address=/www.msftconnecttest.com/${PI_STATIC_IP}
 address=/www.msftncsi.com/${PI_STATIC_IP}
+# Amazon / Kindle
+address=/spectrum.s3.amazonaws.com/${PI_STATIC_IP}
 # Optionally increase cache size
 # cache-size=1000
 EOF
@@ -479,7 +490,7 @@ if [ "$HOSTAPD_STARTED" = true ]; then
     echo "* Static IP ${PI_STATIC_IP}/${PI_IP_PREFIX} configured on interface ${PI_INTERFACE}."
     echo "* dnsmasq configured for DHCP (if enabled) and DNS."
     echo "*   - Standard DNS uses upstream servers: ${PI_DNS_SERVERS}"
-    echo "*   - Connectivity check domains redirected to ${PI_STATIC_IP} to potentially reduce 'no internet' warnings."
+    echo "*   - Connectivity check domains redirected to ${PI_STATIC_IP} to potentially bypass captive portal prompts."
     if [ "$ENABLE_DHCP" = "true" ]; then
         echo "* dnsmasq DHCP server enabled for range ${DHCP_RANGE_START}-${DHCP_RANGE_END}."
     fi
@@ -497,8 +508,8 @@ echo ""
 echo "Next Steps:"
 if [ "$HOSTAPD_STARTED" = true ]; then
     echo "1.  Ensure your web application is running on the Pi listening on port ${TARGET_PORT} (HTTP) and 3443 (HTTPS)."
-    echo "    -> IMPORTANT: To fully suppress 'no internet' warnings, your app should respond with HTTP 204 (No Content)"
-    echo "       to requests for paths like '/generate_204', '/connecttest.txt', '/ncsi.txt', or requests to the connectivity domains."
+    echo "    -> IMPORTANT: To effectively bypass captive portal prompts, your app MUST respond with HTTP 204 (No Content)"
+    echo "       to requests for paths like '/generate_204', '/connecttest.txt', '/ncsi.txt', or requests hitting the intercepted domains."
     echo "2.  Connect client devices to the '${NEW_SSID}' network."
     echo "3.  Clients should get DNS/IP automatically (if DHCP enabled)."
     echo "4.  Test access to your local application from a client device."
