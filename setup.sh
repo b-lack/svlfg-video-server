@@ -364,16 +364,58 @@ if [ "$HOSTAPD_STARTED" = true ]; then
         # Explicitly restart dnsmasq *after* IP is set for hostapd mode
         echo "Restarting dnsmasq after setting static IP..."
         systemctl restart dnsmasq || echo "Warning: Failed to restart dnsmasq after IP assignment."
-        sleep 3 # Give dnsmasq time to start
+        
+        # Wait longer for dnsmasq to initialize properly
+        echo "Giving dnsmasq time to fully initialize..."
+        sleep 5
+        
+        # Verify dnsmasq is actually providing DHCP
+        echo "Verifying dnsmasq DHCP configuration..."
+        if ! grep -q "dhcp-range=" /etc/dnsmasq.conf; then
+            echo "ERROR: No dhcp-range found in dnsmasq.conf. Adding it now..."
+            echo "dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},${DHCP_LEASE_TIME}" >> /etc/dnsmasq.conf
+            systemctl restart dnsmasq
+        fi
+        
+        # Verify dnsmasq is listening on DHCP port
+        echo "Checking if dnsmasq is listening for DHCP requests..."
+        if ! ss -tulpn | grep -q ":67.*dnsmasq"; then
+            echo "ERROR: dnsmasq is not listening on DHCP port 67. Force-enabling DHCP..."
+            echo "dhcp-authoritative" >> /etc/dnsmasq.conf  # Make dnsmasq authoritative
+            systemctl restart dnsmasq
+        fi
+        
+        # Check dnsmasq logs for DHCP-related errors
+        echo "Checking dnsmasq logs for errors..."
+        journalctl -u dnsmasq --since "5 minutes ago" | grep -i -E "dhcp|error|warn" || echo "No recent DHCP errors found in logs."
     else
          echo "Skipping manual static IP configuration (${HOSTAPD_METHOD} mode handles it)."
          # NM in shared mode should configure the IP based on ipv4.addresses setting above
+         
+         # For NetworkManager mode, verify dnsmasq instance
+         echo "Verifying NetworkManager DHCP service..."
+         if pgrep -f "dnsmasq.*--enable-dbus" >/dev/null; then
+             echo "NetworkManager dnsmasq instance is running (good)."
+         else
+             echo "WARNING: No NetworkManager dnsmasq instance detected!"
+             echo "Trying to restart NetworkManager..."
+             systemctl restart NetworkManager
+             sleep 3
+             nmcli con up "${NM_CON_NAME}" || echo "Failed to bring up connection again!"
+         fi
     fi
 
     # Status check
     echo "Network interface status:"
     ip addr show ${PI_INTERFACE}
     iwconfig ${PI_INTERFACE} || true
+    
+    # Explicit firewall check for DHCP
+    echo "Verifying firewall allows DHCP traffic..."
+    iptables -C INPUT -i ${PI_INTERFACE} -p udp --dport 67 -j ACCEPT &>/dev/null || {
+        echo "DHCP firewall rule missing! Adding it now..."
+        iptables -A INPUT -i ${PI_INTERFACE} -p udp --dport 67 -j ACCEPT
+    }
 
     echo "[Step 1] WiFi hotspot '${NEW_SSID}' setup finished using method '${HOSTAPD_METHOD}'."
     sleep 3 # Wait for network to potentially stabilize
