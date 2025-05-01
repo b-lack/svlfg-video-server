@@ -12,7 +12,7 @@ const canonicalHost = 'pi1.gruenecho.de';
 app.use(cors());
 
 // Simple domain-based routing middleware
-app.use((req, res, next) => {
+/*app.use((req, res, next) => {
   // Log all requests
   console.log(`${req.method} ${req.hostname}${req.originalUrl} from ${req.ip}`);
   
@@ -72,16 +72,13 @@ app.use((req, res, next) => {
   
   // Google/Android path-based checks
   if (path.includes('generate_204') || path.includes('gen_204')) {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
     return res.sendStatus(204);
   }
   
   // For all other requests to non-canonical hosts, return 204 No Content
   // This prevents "limited internet" notifications
   return res.sendStatus(204);
-});
+});*/
 
 // Serve static files for our application
 app.use(express.static('public'));
@@ -89,17 +86,6 @@ app.use(express.static('public'));
 // Default route handler for our application
 app.use((req, res) => {
   res.sendFile('index.html', { root: 'public' });
-});
-
-// Explicitly handle common Google connectivity endpoints
-app.get('/generate_204', (req, res) => {
-  console.log('Direct generate_204 request');
-  return res.sendStatus(204);
-});
-
-app.get('/gen_204', (req, res) => {
-  console.log('Direct gen_204 request');
-  return res.sendStatus(204);
 });
 
 // Set up HTTP server
