@@ -14,7 +14,7 @@
 </head>
 <body>
   <h1>Webcam Broadcaster</h1>
-  <video id="localVideo" autoplay playsinline muted></video>
+  <video id="localVideo" autoplay playsinline muted width="1280" height="720" style="max-width: 100%"></video>
   <div id="connectionStats" class="stats"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/connection-monitor.js"></script>
@@ -74,11 +74,20 @@
           
           socket.on('watcher', id => {
             const peerConnection = new RTCPeerConnection({
-              iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
-              ],
+              sdpSemantics: 'unified-plan',
               iceCandidatePoolSize: 10
             });
+
+            // Set preferred video codec parameters
+            const transceiver = peerConnection.getTransceivers()[0];
+            if (transceiver) {
+              const sendParams = transceiver.sender.getParameters();
+              if (sendParams.encodings && sendParams.encodings.length > 0) {
+                sendParams.encodings[0].maxBitrate = 2500000; // 2.5 Mbps
+                sendParams.encodings[0].maxFramerate = 30;
+                transceiver.sender.setParameters(sendParams);
+              }
+            }
             
             peerConnections[id] = peerConnection;
             stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
