@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.urlencoded({ extended: true })); // For parsing form submissions
 
 // Simple domain-based routing middleware
-app.use((req, res, next) => {
+/*app.use((req, res, next) => {
   // Log all requests
   console.log(`${req.method} ${req.hostname}${req.originalUrl} from ${req.ip}`);
   
@@ -78,7 +78,7 @@ app.use((req, res, next) => {
   
   // For all other non-recognized requests, proceed to the app
   next();
-});
+});*/
 
 // Handle login endpoint
 app.post('/login', (req, res) => {
