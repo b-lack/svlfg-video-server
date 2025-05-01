@@ -15,7 +15,7 @@ interface wlan0
     nohook wpa_supplicant
 EOF
 
-sudo service dhcpcd restart
+sudo systemctl restart dhcpcd
 
 # Configure hostapd (open network)
 sudo tee /etc/hostapd/hostapd.conf > /dev/null <<EOF
