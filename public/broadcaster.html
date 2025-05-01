@@ -2,15 +2,38 @@
 <html>
 <head>
   <title>Broadcaster</title>
+  <style>
+    .stats {
+      margin-top: 10px;
+      padding: 10px;
+      background-color: #f0f0f0;
+      border-radius: 5px;
+      font-family: monospace;
+    }
+  </style>
 </head>
 <body>
   <h1>Webcam Broadcaster</h1>
   <video id="localVideo" autoplay playsinline muted></video>
+  <div id="connectionStats" class="stats"></div>
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/connection-monitor.js"></script>
   <script>
     const socket = io();
     const video = document.getElementById('localVideo');
     let peerConnections = {};
+    let monitors = {};
+    const statsElement = document.getElementById('connectionStats');
+
+    // Update the stats display
+    function updateStats(stats) {
+      if (!stats) return;
+      statsElement.innerHTML = `
+        Bitrate: ${Math.round(stats.bitrate/1000)} Kbps<br>
+        Resolution: ${video.videoWidth}x${video.videoHeight}<br>
+        Connections: ${Object.keys(peerConnections).length}
+      `;
+    }
 
     // Check if getUserMedia is supported
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -26,9 +49,9 @@
       const constraints = {
         video: {
           // Example constraints: request a higher resolution
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          // You could add frameRate, facingMode etc. here
+          width: { ideal: 1280 },  // Reduced from 1920 for better performance
+          height: { ideal: 720 },  // Reduced from 1080 for better performance
+          frameRate: { ideal: 30 }
         },
         audio: true // Keep audio constraint or adjust as needed
       };
@@ -36,12 +59,49 @@
       // Get webcam/actioncam stream using the defined constraints
       navigator.mediaDevices.getUserMedia(constraints)
         .then(stream => {
+          // Store stream globally for the monitor to access
+          window.localStream = stream;
           video.srcObject = stream;
+          
+          // Add periodic check for memory leaks
+          setInterval(() => {
+            console.log(`Active connections: ${Object.keys(peerConnections).length}`);
+            // Force garbage collection in some browsers (may not work in all)
+            if (window.gc) window.gc();
+          }, 60000);
+          
           socket.emit('broadcaster');
+          
           socket.on('watcher', id => {
-            const peerConnection = new RTCPeerConnection();
+            const peerConnection = new RTCPeerConnection({
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+              ],
+              iceCandidatePoolSize: 10
+            });
+            
             peerConnections[id] = peerConnection;
             stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+
+            // Create and start connection monitor for this peer
+            monitors[id] = new ConnectionMonitor(peerConnection, socket, {
+              statsInterval: 5000,
+              lowBandwidthThreshold: 150000  // 150 Kbps
+            }).start();
+            
+            // Monitor connection state changes
+            peerConnection.onconnectionstatechange = () => {
+              console.log(`Connection state for ${id}: ${peerConnection.connectionState}`);
+              if (peerConnection.connectionState === 'disconnected' || 
+                  peerConnection.connectionState === 'failed' ||
+                  peerConnection.connectionState === 'closed') {
+                // Clean up the monitor
+                if (monitors[id]) {
+                  monitors[id].stop();
+                  delete monitors[id];
+                }
+              }
+            };
 
             peerConnection.onicecandidate = event => {
               if (event.candidate) {
@@ -66,10 +126,25 @@
 
           socket.on('disconnectPeer', id => {
             if (peerConnections[id]) {
+              // Clean up the monitor first
+              if (monitors[id]) {
+                monitors[id].stop();
+                delete monitors[id];
+              }
+              
+              // Then close the connection
               peerConnections[id].close();
               delete peerConnections[id];
             }
           });
+          
+          // Handle server connection monitoring
+          socket.on('ping', () => {
+            socket.emit('pong');
+          });
+          
+          // Receive connection statistics updates from the server
+          socket.on('connection_stats', updateStats);
         })
         .catch(error => {
           console.error('Error accessing media devices:', error);

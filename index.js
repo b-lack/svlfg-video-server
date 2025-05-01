@@ -38,13 +38,14 @@ app.use((req, res, next) => {
   // Handle specific domains for connectivity checks
   const hostname = req.hostname.toLowerCase();
   
-  // Google/Android connectivity checks - explicitly handle these domains
+  // Google/Android connectivity checks - respond with proper 204 status for these domains
+  // (using 204 instead of redirects to reduce overhead)
   if (hostname.includes('connectivitycheck.gstatic.com') || 
       hostname.includes('clients3.google.com') ||
       hostname.includes('www.google.com')) {
     console.log(`Handling Google connectivity check for ${hostname}`);
-    // Instead of returning 204, redirect to our captive portal
-    return res.redirect(302, 'http://pi1.gruenecho.de');
+    // Return 204 No Content to indicate success without redirection
+    return res.status(204).end();
   }
 
   // Apple connectivity checks
@@ -52,15 +53,15 @@ app.use((req, res, next) => {
       hostname.includes('www.apple.com') ||
       hostname.includes('appleiphonecell.com')) {
     console.log(`Handling Apple connectivity check for ${hostname}`);
-    // Instead of success message, redirect to our portal
-    return res.redirect(302, 'http://pi1.gruenecho.de');
+    // Return success HTML that Apple expects
+    return res.status(200).send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
   }
 
   // Microsoft connectivity checks
   if (hostname.includes('msftconnecttest.com') || 
       hostname.includes('msftncsi.com')) {
     console.log(`Handling Microsoft connectivity check for ${hostname}`);
-    return res.redirect(302, 'http://pi1.gruenecho.de');
+    return res.status(200).send('Microsoft NCSI');
   }
   
   // Handle connectivity checks based on path for non-canonical hosts
@@ -136,24 +137,69 @@ const io = new Server(httpsServer || httpServer, {
 
 // WebRTC signaling
 let broadcaster;
+let peerConnections = {}; // Track all active peer connections
+let lastConnectionCheck = Date.now();
+const CONNECTION_CHECK_INTERVAL = 60000; // Check connections every minute
+
+// Memory usage monitoring
+const monitorMemoryUsage = () => {
+  const memoryUsage = process.memoryUsage();
+  console.log(`Memory usage: RSS ${Math.round(memoryUsage.rss / 1024 / 1024)}MB, Heap ${Math.round(memoryUsage.heapUsed / 1024 / 1024)}/${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`);
+  
+  // If memory usage is high, force garbage collection if available
+  if (global.gc && memoryUsage.heapUsed > 0.8 * memoryUsage.heapTotal) {
+    console.log('Forcing garbage collection');
+    global.gc();
+  }
+};
+
+// Set up periodic memory checks
+const memoryInterval = setInterval(monitorMemoryUsage, 300000); // Every 5 minutes
 
 io.on('connection', (socket) => {
+  console.log(`New socket connection: ${socket.id}`);
+  
+  // Set up ping/pong to keep connections healthy
+  const pingInterval = setInterval(() => {
+    socket.emit('ping');
+  }, 25000);
+  
+  socket.on('pong', () => {
+    // Reset socket timeout on pong response
+    if (socket.conn) {
+      socket.conn.resetTimeout();
+    }
+  });
+  
   socket.on('broadcaster', () => {
+    // Cleanup previous broadcaster if it exists
+    if (broadcaster && broadcaster !== socket.id) {
+      io.to(broadcaster).emit('broadcaster_replaced');
+    }
+    
     broadcaster = socket.id;
+    peerConnections[socket.id] = { role: 'broadcaster', timestamp: Date.now() };
     socket.broadcast.emit('broadcaster');
   });
 
   socket.on('watcher', () => {
     if (broadcaster) {
+      peerConnections[socket.id] = { role: 'watcher', timestamp: Date.now() };
       socket.to(broadcaster).emit('watcher', socket.id);
     }
   });
 
   socket.on('offer', (id, message) => {
+    if (peerConnections[socket.id]) {
+      peerConnections[socket.id].timestamp = Date.now();
+    }
     socket.to(id).emit('offer', socket.id, message);
   });
 
   socket.on('answer', (id, message) => {
+    if (peerConnections[socket.id]) {
+      peerConnections[socket.id].timestamp = Date.now();
+    }
     socket.to(id).emit('answer', socket.id, message);
   });
 
@@ -161,12 +207,62 @@ io.on('connection', (socket) => {
     socket.to(id).emit('candidate', socket.id, message);
   });
 
-  socket.on('disconnect', () => {
-    socket.broadcast.emit('disconnectPeer', socket.id);
-    if (socket.id === broadcaster) {
-      broadcaster = null;
+  // Cleanup function for a socket
+  const cleanupConnection = (socketId) => {
+    // Clear any timers for this socket
+    if (pingInterval) {
+      clearInterval(pingInterval);
     }
+    
+    // Notify peers about disconnection
+    socket.broadcast.emit('disconnectPeer', socketId);
+    
+    // Handle broadcaster disconnect
+    if (socketId === broadcaster) {
+      broadcaster = null;
+      console.log('Broadcaster disconnected');
+    }
+    
+    // Remove from tracked connections
+    delete peerConnections[socketId];
+  };
+
+  socket.on('disconnect', () => {
+    console.log(`Socket disconnected: ${socket.id}`);
+    cleanupConnection(socket.id);
   });
+  
+  // Add connection quality reporting
+  socket.on('connection_stats', (stats) => {
+    console.log(`Connection stats from ${socket.id}:`, stats);
+    // Could store these stats for monitoring/alerts
+  });
+  
+  // Check for stale connections periodically
+  if (Date.now() - lastConnectionCheck > CONNECTION_CHECK_INTERVAL) {
+    lastConnectionCheck = Date.now();
+    const staleThreshold = Date.now() - (5 * 60 * 1000); // 5 minutes
+    
+    Object.keys(peerConnections).forEach(id => {
+      if (peerConnections[id].timestamp < staleThreshold) {
+        console.log(`Removing stale connection: ${id}`);
+        io.to(id).emit('connection_timeout');
+        delete peerConnections[id];
+        
+        // If it was the broadcaster, reset broadcaster
+        if (id === broadcaster) {
+          broadcaster = null;
+        }
+      }
+    });
+  }
+});
+
+// Cleanup on server shutdown
+process.on('SIGINT', () => {
+  clearInterval(memoryInterval);
+  console.log('Shutting down server...');
+  process.exit(0);
 });
 
 // Start HTTP server
