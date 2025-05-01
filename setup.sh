@@ -28,15 +28,15 @@ EOF
 # Configure hostapd (Access Point)
 echo "Setting up WiFi access point..."
 cat > /etc/hostapd/hostapd.conf << EOF
-interface=wlan0
+interface=wlan1
 driver=nl80211
 ssid=SVLFG
 hw_mode=g
 channel=7
-wmm_enabled=0
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
+wpa=0
 EOF
 
 # Configure hostapd to use our configuration
