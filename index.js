@@ -16,20 +16,35 @@ app.use((req, res, next) => {
   // Log all requests
   console.log(`${req.method} ${req.hostname}${req.originalUrl} from ${req.ip}`);
   
-  // If it's our canonical host, proceed to normal handling
+  // If it's our canonical host, proceed to normal application
   if (req.hostname === canonicalHost) {
     return next();
   }
   
-  // For all other domains, just return 204 No Content
-  // This prevents captive portal and "no internet" notifications
+  // Handle connectivity checks based on path for non-canonical hosts
+  const path = req.path.toLowerCase();
+  
+  // Apple devices
+  if (path.includes('hotspot-detect') || path.includes('success.html')) {
+    res.setHeader('Content-Type', 'text/html');
+    return res.send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
+  }
+  
+  // Microsoft NCSI
+  if (path.includes('ncsi.txt') || path.includes('connecttest.txt')) {
+    res.setHeader('Content-Type', 'text/plain');
+    return res.send('Microsoft NCSI');
+  }
+  
+  // For all other requests to non-canonical hosts, return 204 No Content
+  // This prevents "limited internet" notifications
   return res.sendStatus(204);
 });
 
-// Serve static files
+// Serve static files for our application
 app.use(express.static('public'));
 
-// Default route handler
+// Default route handler for our application
 app.use((req, res) => {
   res.sendFile('index.html', { root: 'public' });
 });
@@ -37,8 +52,22 @@ app.use((req, res) => {
 // Set up HTTP server
 const httpServer = http.createServer(app);
 
+// Set up HTTPS server if certificates are available
+let httpsServer;
+try {
+  const options = {
+    key: fs.readFileSync('./certificates/privkey.pem'),
+    cert: fs.readFileSync('./certificates/fullchain.pem')
+  };
+  httpsServer = https.createServer(options, app);
+} catch (err) {
+  console.error('Error loading certificates:', err);
+  console.log('Falling back to HTTP only');
+  httpsServer = null;
+}
+
 // Set up Socket.io
-const io = new Server(httpServer, {
+const io = new Server(httpsServer || httpServer, {
   cors: {
     origin: '*',
   }
@@ -83,5 +112,12 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`HTTP server running on port ${PORT}`);
-  console.log(`Serving ${canonicalHost}, returning 204 for all other domains`);
 });
+
+// Start HTTPS server if available
+if (httpsServer) {
+  const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+  httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+    console.log(`HTTPS Server running on port ${HTTPS_PORT}`);
+  });
+}
