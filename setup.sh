@@ -11,7 +11,7 @@ fi
 
 echo "Installing required packages..."
 apt-get update
-apt-get install -y hostapd dnsmasq iptables nginx
+apt-get install -y hostapd dnsmasq iptables
 
 # Stop services for configuration
 systemctl stop hostapd
@@ -49,63 +49,17 @@ cat > /etc/dnsmasq.conf << EOF
 interface=wlan1
 dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
 domain=local
-# Redirect ALL domains to our IP (except pi1.gruenecho.de which is already handled)
-address=/#/192.168.4.1
+address=/pi1.gruenecho.de/192.168.4.1
 EOF
-
-# Replace the Nginx captive portal with a more comprehensive reverse proxy
-cat > /etc/nginx/sites-available/captive-portal << EOF
-server {
-    listen 80 default_server;
-    
-    # Handle connectivity check endpoints directly
-    location /generate_204 {
-        return 204;
-    }
-    
-    location /ncsi.txt {
-        add_header Content-Type text/plain;
-        return 200 "Microsoft NCSI";
-    }
-    
-    location /hotspot-detect.html {
-        add_header Content-Type text/html;
-        return 200 '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
-    }
-    
-    # Specific handling for pi1.gruenecho.de
-    location / {
-        # Handle known connectivity check endpoints
-        if (\$request_uri ~* "/generate_204") {
-            return 204;
-        }
-        
-        # Forward everything else to our Node.js app
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-}
-EOF
-
-# Remove any old symbolic links and create a new one
-rm -f /etc/nginx/sites-enabled/default
-rm -f /etc/nginx/sites-enabled/captive-portal
-ln -sf /etc/nginx/sites-available/captive-portal /etc/nginx/sites-enabled/
 
 # Enable IP forwarding
 echo "Enabling IP forwarding..."
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 sysctl -p
 
-# Configure iptables for forwarding all traffic
+# Configure iptables for redirection
 echo "Setting up redirection rules..."
-# Clear existing rules
-iptables -t nat -F
-
-# Redirect all HTTP traffic to the Nginx server
-iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 80 -j REDIRECT --to-port 80
-iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 443 -j REDIRECT --to-port 80
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 3000
 
 # Save iptables rules
 iptables-save > /etc/iptables.ipv4.nat
@@ -124,14 +78,12 @@ echo "Enabling services..."
 systemctl unmask hostapd
 systemctl enable hostapd
 systemctl enable dnsmasq
-systemctl enable nginx
 
 # Restart services
 echo "Restarting services..."
 systemctl restart dhcpcd
 systemctl restart hostapd
 systemctl restart dnsmasq
-systemctl restart nginx
 
 echo "Setup complete! The SVLFG WiFi network should now be available."
-echo "All internet traffic will be forwarded to your Node.js server on port 3000."
+echo "When users connect and visit pi1.gruenecho.de, they will be redirected to your Node.js server on port 3000."
