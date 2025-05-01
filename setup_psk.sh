@@ -56,21 +56,13 @@ mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
 cat > /etc/dnsmasq.conf << EOF
 interface=wlan1
 dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
-# Redirect ALL domains to our Pi
-address=/#/192.168.4.1
-# Specifically handle captive portal detection domains
-address=/connectivitycheck.gstatic.com/192.168.4.1
-address=/www.gstatic.com/192.168.4.1
-address=/clients3.google.com/192.168.4.1
-address=/captive.apple.com/192.168.4.1
-address=/www.apple.com/192.168.4.1
-address=/www.msftconnecttest.com/192.168.4.1
+# Don't redirect captive portal detection domains - let them fail naturally
+# This prevents devices from showing captive portal notifications
 # Don't use /etc/hosts
 no-hosts
-# Don't forward DNS queries to upstream servers
-no-resolv
-# Respond to all DNS queries with our IP
-bogus-priv
+# Forward DNS queries to upstream DNS servers (Google DNS)
+server=8.8.8.8
+server=8.8.4.4
 EOF
 
 # Enable IP forwarding
@@ -78,17 +70,18 @@ echo "Enabling IP forwarding..."
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 sysctl -p
 
-# Configure iptables for redirection
-echo "Setting up redirection rules..."
+# Configure iptables for network access
+echo "Setting up network access rules..."
 # Clear existing rules
 iptables -t nat -F
+iptables -F
 
-# Explicitly redirect HTTP/HTTPS traffic for pi1.gruenecho.de to the correct Node.js port
-# Make sure we're not catching SSH traffic (port 22)
-iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 80 -j REDIRECT --to-port 3000
-iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 443 -j REDIRECT --to-port 3443
+# Enable NAT for internet access
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+iptables -A FORWARD -i wlan1 -o eth0 -j ACCEPT
+iptables -A FORWARD -i eth0 -o wlan1 -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-# Handle captive portal detection requests specifically
+# Optional: redirect your application traffic only (remove if not needed)
 iptables -t nat -A PREROUTING -i wlan1 -p tcp -d 192.168.4.1 --dport 80 -j REDIRECT --to-port 3000
 iptables -t nat -A PREROUTING -i wlan1 -p tcp -d 192.168.4.1 --dport 443 -j REDIRECT --to-port 3443
 
