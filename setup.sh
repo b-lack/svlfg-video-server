@@ -1,5 +1,19 @@
 #!/bin/bash
 
+# Set Wi-Fi Country Code (adjust 'DE' if necessary)
+COUNTRY_CODE=DE 
+sudo raspi-config nonint do_wifi_country $COUNTRY_CODE || echo "Setting country code via raspi-config failed, attempting alternative."
+# Alternative/Fallback for non-Raspberry Pi OS or if raspi-config fails:
+# Check if /etc/default/crda exists and set REGDOMAIN
+if [ -f /etc/default/crda ]; then
+    sudo sed -i "s/^REGDOMAIN=.*/REGDOMAIN=$COUNTRY_CODE/" /etc/default/crda
+else
+    echo "/etc/default/crda not found, country code might need manual configuration."
+fi
+
+# Unblock Wi-Fi
+sudo rfkill unblock wifi
+
 # Install required packages
 sudo apt update
 sudo apt install -y hostapd dnsmasq dhcpcd5
@@ -24,6 +38,7 @@ driver=nl80211
 ssid=SVLFG
 hw_mode=g
 channel=7
+country_code=$COUNTRY_CODE # Add country code
 auth_algs=1
 wmm_enabled=0
 EOF
@@ -47,6 +62,10 @@ sudo systemctl enable hostapd
 sudo systemctl enable dnsmasq
 sudo systemctl start hostapd
 sudo systemctl start dnsmasq
+
+# Check hostapd status
+sleep 5 # Give hostapd some time to start
+sudo systemctl status hostapd --no-pager
 
 echo "Wi-Fi AP 'SVLFG' created. Devices connecting to 'pi1.gruenecho.de' will be directed to 192.168.4.1."
 
