@@ -2,7 +2,7 @@
 
 # Install required packages
 sudo apt update
-sudo apt install -y hostapd dnsmasq
+sudo apt install -y hostapd dnsmasq dhcpcd5
 
 # Stop services to configure
 sudo systemctl stop hostapd
