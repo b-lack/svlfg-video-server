@@ -22,33 +22,54 @@ app.use((req, res, next) => {
     return res.status(400).send('This is an HTTP server, not SSH');
   }
   
-  // Special handling for connectivity check paths
-  const path = req.path.toLowerCase();
-  if (path.includes('hotspot-detect') || 
-      path.includes('success.html') || 
-      path.includes('ncsi.txt') || 
-      path.includes('connecttest.txt') ||
-      path.includes('generate_204')) {
-    // Return appropriate success responses for connectivity checks
-    if (path.includes('ncsi.txt') || path.includes('connecttest.txt')) {
-      res.setHeader('Content-Type', 'text/plain');
-      return res.send('Microsoft NCSI');
-    } else if (path.includes('hotspot-detect') || path.includes('success.html')) {
-      res.setHeader('Content-Type', 'text/html');
-      return res.send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
-    } else {
-      return res.sendStatus(204);
-    }
-  }
-  
-  // If it's already our canonical host, proceed to normal application
+  // If it's our canonical host, proceed to normal application
   if (req.hostname === canonicalHost) {
     return next();
   }
   
-  // For all other hosts/domains, redirect to canonical host
-  // This ensures all traffic eventually goes to pi1.gruenecho.de
-  return res.redirect(`http://${canonicalHost}${req.originalUrl}`);
+  // Handle specific domains for connectivity checks
+  const hostname = req.hostname.toLowerCase();
+  
+  // Google/Android connectivity checks - explicitly handle these domains
+  if (hostname.includes('connectivitycheck.gstatic.com') || 
+      hostname.includes('clients3.google.com') ||
+      hostname.includes('www.google.com')) {
+    console.log(`Handling Google connectivity check for ${hostname}`);
+    return res.sendStatus(204);
+  }
+
+  // Apple connectivity checks
+  if (hostname.includes('captive.apple.com') || 
+      hostname.includes('www.apple.com') ||
+      hostname.includes('appleiphonecell.com')) {
+    console.log(`Handling Apple connectivity check for ${hostname}`);
+    res.setHeader('Content-Type', 'text/html');
+    return res.send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
+  }
+  
+  // Handle connectivity checks based on path for non-canonical hosts
+  const path = req.path.toLowerCase();
+  
+  // Apple devices
+  if (path.includes('hotspot-detect') || path.includes('success.html')) {
+    res.setHeader('Content-Type', 'text/html');
+    return res.send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
+  }
+  
+  // Microsoft NCSI
+  if (path.includes('ncsi.txt') || path.includes('connecttest.txt')) {
+    res.setHeader('Content-Type', 'text/plain');
+    return res.send('Microsoft NCSI');
+  }
+  
+  // Google/Android path-based checks
+  if (path.includes('generate_204') || path.includes('gen_204')) {
+    return res.sendStatus(204);
+  }
+  
+  // For all other requests to non-canonical hosts, return 204 No Content
+  // This prevents "limited internet" notifications
+  return res.sendStatus(204);
 });
 
 // Serve static files for our application
