@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" no-cache">
+    <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Wi-Fi Login</title>
     <style>
@@ -41,11 +41,13 @@
             // No need to prevent default - let the form submission happen
             // After form submission completes, the server should redirect to a success page
             
+            document.querySelector('button[type="submit"]').textContent = 'Connecting...';
+
             // For iOS devices - redirect to Apple's success URL with a delay to allow form submission
-            setTimeout(function() {
+            /*setTimeout(function() {
                 // Try to close by loading a special local success page
                 window.location.href = "/success.html";
-            }, 1500);
+            }, 1500);*/
         });
     </script>
 </body>

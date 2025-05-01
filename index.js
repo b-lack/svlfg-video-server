@@ -16,6 +16,13 @@ app.use(express.urlencoded({ extended: true })); // For parsing form submissions
 app.use((req, res, next) => {
   // Log all requests
   console.log(`${req.method} ${req.hostname}${req.originalUrl} from ${req.ip}`);
+
+  // Set authentication cookie
+  res.cookie('authenticated', 'true', { 
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    httpOnly: true,
+    secure: req.secure
+  });
   
   // Check if we're getting binary data that might be SSH traffic
   if (req.headers['content-type'] && req.headers['content-type'].includes('application/ssh')) {
