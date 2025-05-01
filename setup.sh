@@ -50,6 +50,12 @@ interface=wlan1
 dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
 # Redirect ALL domains to our Pi
 address=/#/192.168.4.1
+# Don't use /etc/hosts
+no-hosts
+# Don't forward DNS queries to upstream servers
+no-resolv
+# Respond to all DNS queries with our IP
+bogus-priv
 EOF
 
 # Enable IP forwarding

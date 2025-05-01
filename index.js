@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.urlencoded({ extended: true })); // For parsing form submissions
 
 // Simple domain-based routing middleware
-/*app.use((req, res, next) => {
+app.use((req, res, next) => {
   // Log all requests
   console.log(`${req.method} ${req.hostname}${req.originalUrl} from ${req.ip}`);
   
@@ -36,7 +36,8 @@ app.use(express.urlencoded({ extended: true })); // For parsing form submissions
       hostname.includes('clients3.google.com') ||
       hostname.includes('www.google.com')) {
     console.log(`Handling Google connectivity check for ${hostname}`);
-    return res.sendStatus(204);
+    // Instead of returning 204, redirect to our captive portal
+    return res.redirect(302, 'http://pi1.gruenecho.de');
   }
 
   // Apple connectivity checks
@@ -44,16 +45,15 @@ app.use(express.urlencoded({ extended: true })); // For parsing form submissions
       hostname.includes('www.apple.com') ||
       hostname.includes('appleiphonecell.com')) {
     console.log(`Handling Apple connectivity check for ${hostname}`);
-    res.setHeader('Content-Type', 'text/html');
-    return res.send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
+    // Instead of success message, redirect to our portal
+    return res.redirect(302, 'http://pi1.gruenecho.de');
   }
 
   // Microsoft connectivity checks
   if (hostname.includes('msftconnecttest.com') || 
       hostname.includes('msftncsi.com')) {
     console.log(`Handling Microsoft connectivity check for ${hostname}`);
-    res.setHeader('Content-Type', 'text/plain');
-    return res.send('Microsoft NCSI');
+    return res.redirect(302, 'http://pi1.gruenecho.de');
   }
   
   // Handle connectivity checks based on path for non-canonical hosts
@@ -61,24 +61,22 @@ app.use(express.urlencoded({ extended: true })); // For parsing form submissions
   
   // Apple devices
   if (path.includes('hotspot-detect') || path.includes('success.html')) {
-    res.setHeader('Content-Type', 'text/html');
-    return res.send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
+    return res.redirect(302, 'http://pi1.gruenecho.de');
   }
   
   // Microsoft NCSI
   if (path.includes('ncsi.txt') || path.includes('connecttest.txt')) {
-    res.setHeader('Content-Type', 'text/plain');
-    return res.send('Microsoft NCSI');
+    return res.redirect(302, 'http://pi1.gruenecho.de');
   }
   
   // Google/Android path-based checks
   if (path.includes('generate_204') || path.includes('gen_204')) {
-    return res.sendStatus(204);
+    return res.redirect(302, 'http://pi1.gruenecho.de');
   }
   
   // For all other non-recognized requests, proceed to the app
   next();
-});*/
+});
 
 // Handle login endpoint
 app.post('/login', (req, res) => {
