@@ -49,25 +49,16 @@ cat > /etc/dnsmasq.conf << EOF
 interface=wlan1
 dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
 domain=local
-# Redirect specific domains for connectivity checks
-address=/connectivitycheck.gstatic.com/192.168.4.1
-address=/www.gstatic.com/192.168.4.1
-address=/www.google.com/192.168.4.1
-address=/clients3.google.com/192.168.4.1
-address=/captive.apple.com/192.168.4.1
-# Redirect our application domain
-address=/pi1.gruenecho.de/192.168.4.1
-# Allow all other domains to resolve normally
-server=8.8.8.8
-server=8.8.4.4
+# Redirect ALL domains to our IP (except pi1.gruenecho.de which is already handled)
+address=/#/192.168.4.1
 EOF
 
-# Create improved captive portal handling
+# Replace the Nginx captive portal with a more comprehensive reverse proxy
 cat > /etc/nginx/sites-available/captive-portal << EOF
 server {
     listen 80 default_server;
     
-    # Handle Google connectivity checks
+    # Handle connectivity check endpoints directly
     location /generate_204 {
         return 204;
     }
@@ -77,52 +68,44 @@ server {
         return 200 "Microsoft NCSI";
     }
     
-    location /connecttest.txt {
-        add_header Content-Type text/plain;
-        return 200 "Microsoft Connect Test";
-    }
-    
-    # Apple CNA handling
     location /hotspot-detect.html {
         add_header Content-Type text/html;
         return 200 '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
     }
     
-    # Catch-all for other connectivity checks
+    # Specific handling for pi1.gruenecho.de
     location / {
-        if (\$http_user_agent ~* "CaptiveNetworkSupport|ConnectivityCheck") {
-            add_header Content-Type text/html;
-            return 200 '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
+        # Handle known connectivity check endpoints
+        if (\$request_uri ~* "/generate_204") {
+            return 204;
         }
         
-        # Only redirect pi1.gruenecho.de to the Node.js server
-        if (\$host = "pi1.gruenecho.de") {
-            proxy_pass http://127.0.0.1:3000;
-        }
+        # Forward everything else to our Node.js app
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
     }
 }
 EOF
 
-ln -s /etc/nginx/sites-available/captive-portal /etc/nginx/sites-enabled/
+# Remove any old symbolic links and create a new one
+rm -f /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-enabled/captive-portal
+ln -sf /etc/nginx/sites-available/captive-portal /etc/nginx/sites-enabled/
 
 # Enable IP forwarding
 echo "Enabling IP forwarding..."
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 sysctl -p
 
-# Configure iptables for redirection and NAT
+# Configure iptables for forwarding all traffic
 echo "Setting up redirection rules..."
 # Clear existing rules
 iptables -t nat -F
 
-# If we have an internet-connected interface (like eth0), set up NAT
-if ip link show eth0 >/dev/null 2>&1; then
-    echo "Setting up NAT for possible internet sharing..."
-    iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-fi
-
-# Only redirect pi1.gruenecho.de to port 3000
-iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 80 -d 192.168.4.1 -j REDIRECT --to-port 80
+# Redirect all HTTP traffic to the Nginx server
+iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 80 -j REDIRECT --to-port 80
+iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 443 -j REDIRECT --to-port 80
 
 # Save iptables rules
 iptables-save > /etc/iptables.ipv4.nat
@@ -151,4 +134,4 @@ systemctl restart dnsmasq
 systemctl restart nginx
 
 echo "Setup complete! The SVLFG WiFi network should now be available."
-echo "When users connect and visit pi1.gruenecho.de, they will be redirected to your Node.js server on port 3000."
+echo "All internet traffic will be forwarded to your Node.js server on port 3000."
