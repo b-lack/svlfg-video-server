@@ -20,7 +20,7 @@ systemctl stop dnsmasq
 # Configure network interface
 echo "Configuring network interface..."
 cat > /etc/dhcpcd.conf << EOF
-interface wlan0
+interface wlan1
     static ip_address=192.168.4.1/24
     nohook wpa_supplicant
 EOF
@@ -46,7 +46,7 @@ echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
 echo "Configuring DHCP and DNS..."
 mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
 cat > /etc/dnsmasq.conf << EOF
-interface=wlan0
+interface=wlan1
 dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
 domain=local
 address=/pi1.gruenecho.de/192.168.4.1
