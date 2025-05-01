@@ -1,73 +1,89 @@
 #!/bin/bash
 
-# Set Wi-Fi Country Code (adjust 'DE' if necessary)
-COUNTRY_CODE=DE 
-sudo raspi-config nonint do_wifi_country $COUNTRY_CODE || echo "Setting country code via raspi-config failed, attempting alternative."
-# Alternative/Fallback for non-Raspberry Pi OS or if raspi-config fails:
-# Check if /etc/default/crda exists and set REGDOMAIN
-if [ -f /etc/default/crda ]; then
-    sudo sed -i "s/^REGDOMAIN=.*/REGDOMAIN=$COUNTRY_CODE/" /etc/default/crda
-else
-    echo "/etc/default/crda not found, country code might need manual configuration."
+# Exit on error
+set -e
+
+# Must run as root
+if [ "$(id -u)" != "0" ]; then
+   echo "This script must be run as root" 1>&2
+   exit 1
 fi
 
-# Unblock Wi-Fi
-sudo rfkill unblock wifi
+echo "Installing required packages..."
+apt-get update
+apt-get install -y hostapd dnsmasq iptables
 
-# Install required packages
-sudo apt update
-sudo apt install -y hostapd dnsmasq dhcpcd5
+# Stop services for configuration
+systemctl stop hostapd
+systemctl stop dnsmasq
 
-# Stop services to configure
-sudo systemctl stop hostapd
-sudo systemctl stop dnsmasq
-
-# Configure static IP for wlan0
-sudo tee /etc/dhcpcd.conf > /dev/null <<EOF
+# Configure network interface
+echo "Configuring network interface..."
+cat > /etc/dhcpcd.conf << EOF
 interface wlan0
     static ip_address=192.168.4.1/24
     nohook wpa_supplicant
 EOF
 
-sudo systemctl restart dhcpcd
-
-# Configure hostapd (open network)
-sudo tee /etc/hostapd/hostapd.conf > /dev/null <<EOF
+# Configure hostapd (Access Point)
+echo "Setting up WiFi access point..."
+cat > /etc/hostapd/hostapd.conf << EOF
 interface=wlan0
 driver=nl80211
 ssid=SVLFG
 hw_mode=g
 channel=7
-country_code=$COUNTRY_CODE # Add country code
-auth_algs=1
 wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
 EOF
 
-sudo sed -i 's|#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+# Configure hostapd to use our configuration
+echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > /etc/default/hostapd
 
-# Configure dnsmasq for DHCP and DNS
-sudo tee /etc/dnsmasq.conf > /dev/null <<EOF
+# Configure dnsmasq (DHCP and DNS)
+echo "Configuring DHCP and DNS..."
+mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
+cat > /etc/dnsmasq.conf << EOF
 interface=wlan0
-dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
+dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
+domain=local
 address=/pi1.gruenecho.de/192.168.4.1
 EOF
 
 # Enable IP forwarding
-sudo sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
-sudo sysctl -p
+echo "Enabling IP forwarding..."
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+sysctl -p
 
-# Start services
-sudo systemctl unmask hostapd
-sudo systemctl enable hostapd
-sudo systemctl enable dnsmasq
-sudo systemctl start hostapd
-sudo systemctl start dnsmasq
+# Configure iptables for redirection
+echo "Setting up redirection rules..."
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 3000
 
-# Check hostapd status
-sleep 5 # Give hostapd some time to start
-sudo systemctl status hostapd --no-pager
+# Save iptables rules
+iptables-save > /etc/iptables.ipv4.nat
 
-echo "Wi-Fi AP 'SVLFG' created. Devices connecting to 'pi1.gruenecho.de' will be directed to 192.168.4.1."
+# Make iptables rules persistent
+echo "Making iptables rules persistent..."
+cat > /etc/rc.local << EOF
+#!/bin/sh -e
+iptables-restore < /etc/iptables.ipv4.nat
+exit 0
+EOF
+chmod +x /etc/rc.local
 
-echo "To redirect all HTTP traffic to your Node.js server on port 3000, add this iptables rule:"
-sudo iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j REDIRECT --to-port 3000
+# Enable and start services
+echo "Enabling services..."
+systemctl unmask hostapd
+systemctl enable hostapd
+systemctl enable dnsmasq
+
+# Restart services
+echo "Restarting services..."
+systemctl restart dhcpcd
+systemctl restart hostapd
+systemctl restart dnsmasq
+
+echo "Setup complete! The SVLFG WiFi network should now be available."
+echo "When users connect and visit pi1.gruenecho.de, they will be redirected to your Node.js server on port 3000."
