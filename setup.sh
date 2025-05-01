@@ -49,21 +49,56 @@ cat > /etc/dnsmasq.conf << EOF
 interface=wlan1
 dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
 domain=local
-# Only redirect the specific domain we want
+# Redirect specific domains for connectivity checks
+address=/connectivitycheck.gstatic.com/192.168.4.1
+address=/www.gstatic.com/192.168.4.1
+address=/www.google.com/192.168.4.1
+address=/clients3.google.com/192.168.4.1
+address=/captive.apple.com/192.168.4.1
+# Redirect our application domain
 address=/pi1.gruenecho.de/192.168.4.1
 # Allow all other domains to resolve normally
 server=8.8.8.8
 server=8.8.4.4
 EOF
 
-# Add captive portal handling 
+# Create improved captive portal handling
 cat > /etc/nginx/sites-available/captive-portal << EOF
 server {
-    listen 80;
-    server_name captive.apple.com connectivitycheck.gstatic.com www.google.com clients3.google.com;
-
-    location / {
+    listen 80 default_server;
+    
+    # Handle Google connectivity checks
+    location /generate_204 {
         return 204;
+    }
+    
+    location /ncsi.txt {
+        add_header Content-Type text/plain;
+        return 200 "Microsoft NCSI";
+    }
+    
+    location /connecttest.txt {
+        add_header Content-Type text/plain;
+        return 200 "Microsoft Connect Test";
+    }
+    
+    # Apple CNA handling
+    location /hotspot-detect.html {
+        add_header Content-Type text/html;
+        return 200 '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
+    }
+    
+    # Catch-all for other connectivity checks
+    location / {
+        if (\$http_user_agent ~* "CaptiveNetworkSupport|ConnectivityCheck") {
+            add_header Content-Type text/html;
+            return 200 '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
+        }
+        
+        # Only redirect pi1.gruenecho.de to the Node.js server
+        if (\$host = "pi1.gruenecho.de") {
+            proxy_pass http://127.0.0.1:3000;
+        }
     }
 }
 EOF
@@ -75,27 +110,19 @@ echo "Enabling IP forwarding..."
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 sysctl -p
 
-# Configure iptables for redirection
+# Configure iptables for redirection and NAT
 echo "Setting up redirection rules..."
 # Clear existing rules
 iptables -t nat -F
 
+# If we have an internet-connected interface (like eth0), set up NAT
+if ip link show eth0 >/dev/null 2>&1; then
+    echo "Setting up NAT for possible internet sharing..."
+    iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+fi
+
 # Only redirect pi1.gruenecho.de to port 3000
-# First create a chain for our exceptions
-iptables -t nat -N CAPTIVE_PORTAL_EXCEPTIONS 2>/dev/null || true
-iptables -t nat -F CAPTIVE_PORTAL_EXCEPTIONS
-
-# Add exceptions for captive portal detection domains
-iptables -t nat -A CAPTIVE_PORTAL_EXCEPTIONS -d 8.8.8.8 -j RETURN
-iptables -t nat -A CAPTIVE_PORTAL_EXCEPTIONS -d 8.8.4.4 -j RETURN
-iptables -t nat -A CAPTIVE_PORTAL_EXCEPTIONS -d 208.67.222.222 -j RETURN
-iptables -t nat -A CAPTIVE_PORTAL_EXCEPTIONS -p tcp --dport 80 -m string --string "captive.apple.com" --algo bm -j RETURN
-iptables -t nat -A CAPTIVE_PORTAL_EXCEPTIONS -p tcp --dport 80 -m string --string "connectivitycheck.gstatic.com" --algo bm -j RETURN
-iptables -t nat -A CAPTIVE_PORTAL_EXCEPTIONS -p tcp --dport 80 -m string --string "clients3.google.com" --algo bm -j RETURN
-iptables -t nat -A CAPTIVE_PORTAL_EXCEPTIONS -p tcp --dport 80 -m string --string "www.google.com" --algo bm -j RETURN
-
-# Only redirect traffic for pi1.gruenecho.de to port 3000
-iptables -t nat -A PREROUTING -p tcp --dport 80 -m string --string "pi1.gruenecho.de" --algo bm -j REDIRECT --to-port 3000
+iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 80 -d 192.168.4.1 -j REDIRECT --to-port 80
 
 # Save iptables rules
 iptables-save > /etc/iptables.ipv4.nat
