@@ -62,7 +62,7 @@ echo "Setting up redirection rules..."
 # Clear existing rules
 iptables -t nat -F
 
-# Redirect all HTTP traffic to Node.js server
+# Forward all HTTP/HTTPS traffic to Node.js server
 iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 80 -j REDIRECT --to-port 3000
 iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 443 -j REDIRECT --to-port 3000
 
@@ -78,18 +78,38 @@ exit 0
 EOF
 chmod +x /etc/rc.local
 
+# Create a service file for the Node.js server
+echo "Creating service for Node.js server..."
+cat > /etc/systemd/system/nodeserver.service << EOF
+[Unit]
+Description=Node.js Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/Users/b-mini/sites/svlfg/video/server
+ExecStart=/usr/bin/node /Users/b-mini/sites/svlfg/video/server/index.js
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # Enable and start services
 echo "Enabling services..."
+systemctl daemon-reload
 systemctl unmask hostapd
 systemctl enable hostapd
 systemctl enable dnsmasq
+systemctl enable nodeserver
 
 # Restart services
 echo "Restarting services..."
 systemctl restart dhcpcd
 systemctl restart hostapd
 systemctl restart dnsmasq
+systemctl start nodeserver
 
 echo "Setup complete! The SVLFG WiFi network should now be available."
-echo "Node.js server will handle connectivity checks and redirects to prevent captive portal."
-echo "Make sure your Node.js server is running before connecting clients."
+echo "The Node.js server will handle all connectivity checks to prevent captive portal and 'no internet' notifications."

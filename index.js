@@ -8,95 +8,37 @@ const app = express();
 
 const canonicalHost = 'pi1.gruenecho.de';
 
-// Create a separate Express app for HTTP to HTTPS redirection
-const redirectApp = express();
-redirectApp.use((req, res) => {
-  // Always redirect to HTTPS canonical domain
-  const redirectUrl = `https://${canonicalHost}${req.originalUrl}`;
-  res.redirect(301, redirectUrl);
-});
-
-// HTTP server ONLY for redirecting to HTTPS
-const httpServer = http.createServer(redirectApp);
-
-// Main app runs only on HTTPS
-let httpsServer;
-try {
-  const options = {
-    key: fs.readFileSync('./certificates/privkey.pem'),
-    cert: fs.readFileSync('./certificates/fullchain.pem')
-  };
-  httpsServer = https.createServer(options, app);
-} catch (err) {
-  console.error('Error loading certificates:', err);
-  console.log('Falling back to HTTP only');
-  httpsServer = null;
-}
-
-// Redirect HTTPS requests with wrong host to canonical host
-app.use((req, res, next) => {
-  if (req.hostname !== canonicalHost) {
-    const redirectUrl = `https://${canonicalHost}${req.originalUrl}`;
-    return res.redirect(301, redirectUrl);
-  }
-  next();
-});
-
 // Configure middleware
 app.use(cors());
-app.use(express.static('public'));
 
-// Captive portal detection endpoints
-const captivePortalHandler = (req, res) => {
-  // Respond with HTTP 204 (No Content) to satisfy connectivity checks
-  // This should prevent the captive portal page from showing on many devices.
-  console.log(`Received connectivity check request: ${req.method} ${req.originalUrl} from ${req.ip}`);
-  res.sendStatus(204); 
-};
-
-app.get('/generate_204', captivePortalHandler); // Android, Google
-app.get('/hotspot-detect.html', captivePortalHandler); // Apple
-app.get('/ncsi.txt', captivePortalHandler); // Windows NCSI
-app.get('/connecttest.txt', captivePortalHandler); // Windows 10+ NCSI
-app.get('/redirect', captivePortalHandler); // Some Linux/Android, older Apple
-
-// Add handlers for requests directly to the intercepted domains' root path
-// These might be requested if the device uses the domain root for checks
-app.get('/', (req, res, next) => {
-  const interceptedDomains = [
-    'connectivitycheck.gstatic.com',
-    'clients3.google.com',
-    'clients.google.com',
-    'captive.apple.com',
-    'www.apple.com',
-    'www.appleiphonecell.com',
-    'airport.us',
-    'ibook.info',
-    'www.msftconnecttest.com',
-    'www.msftncsi.com',
-    'spectrum.s3.amazonaws.com'
-  ];
-  if (interceptedDomains.includes(req.hostname)) {
-    console.log(`Received connectivity check request to domain root: ${req.hostname} from ${req.ip}`);
-    return res.sendStatus(204);
-  }
-  // If not an intercepted domain root request, continue to static serving or SPA handler
-  next();
-});
-
-// After all other middleware and routes
-app.use((req, res) => {
-  // For API routes, you might want to return a 404 JSON response
-  if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'Not found' });
+// Simple domain-based routing middleware
+app.use((req, res, next) => {
+  // Log all requests
+  console.log(`${req.method} ${req.hostname}${req.originalUrl} from ${req.ip}`);
+  
+  // If it's our canonical host, proceed to normal handling
+  if (req.hostname === canonicalHost) {
+    return next();
   }
   
-  // For all other routes, serve the SPA's index.html
+  // For all other domains, just return 204 No Content
+  // This prevents captive portal and "no internet" notifications
+  return res.sendStatus(204);
+});
+
+// Serve static files
+app.use(express.static('public'));
+
+// Default route handler
+app.use((req, res) => {
   res.sendFile('index.html', { root: 'public' });
 });
 
+// Set up HTTP server
+const httpServer = http.createServer(app);
+
 // Set up Socket.io
-const io = new Server(httpsServer || httpServer, {
+const io = new Server(httpServer, {
   cors: {
     origin: '*',
   }
@@ -137,16 +79,9 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start HTTP redirect server
+// Start HTTP server
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`HTTP redirect server running on port ${PORT}`);
+  console.log(`HTTP server running on port ${PORT}`);
+  console.log(`Serving ${canonicalHost}, returning 204 for all other domains`);
 });
-
-// Start HTTPS server
-if (httpsServer) {
-  const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
-  httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
-    console.log(`HTTPS Server running on port ${HTTPS_PORT}`);
-  });
-}
