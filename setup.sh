@@ -48,8 +48,25 @@ mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
 cat > /etc/dnsmasq.conf << EOF
 interface=wlan1
 dhcp-range=192.168.4.2,192.168.4.100,255.255.255.0,24h
-# Redirect ALL domains to our Pi
-address=/#/192.168.4.1
+
+# Specific domain redirections for connectivity checks
+address=/connectivitycheck.gstatic.com/192.168.4.1
+address=/www.google.com/192.168.4.1
+address=/clients3.google.com/192.168.4.1
+address=/clients.l.google.com/192.168.4.1
+address=/connectivitycheck.android.com/192.168.4.1
+
+# Apple connectivity checks
+address=/captive.apple.com/192.168.4.1
+address=/www.apple.com/192.168.4.1
+address=/appleiphonecell.com/192.168.4.1
+
+# Microsoft connectivity checks
+address=/msftconnecttest.com/192.168.4.1
+address=/msftncsi.com/192.168.4.1
+
+# You can still keep a catch-all for all other domains if needed
+# address=/#/192.168.4.1
 EOF
 
 # Enable IP forwarding

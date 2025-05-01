@@ -46,6 +46,14 @@ app.use((req, res, next) => {
     res.setHeader('Content-Type', 'text/html');
     return res.send('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>');
   }
+
+  // Microsoft connectivity checks
+  if (hostname.includes('msftconnecttest.com') || 
+      hostname.includes('msftncsi.com')) {
+    console.log(`Handling Microsoft connectivity check for ${hostname}`);
+    res.setHeader('Content-Type', 'text/plain');
+    return res.send('Microsoft NCSI');
+  }
   
   // Handle connectivity checks based on path for non-canonical hosts
   const path = req.path.toLowerCase();
@@ -64,6 +72,9 @@ app.use((req, res, next) => {
   
   // Google/Android path-based checks
   if (path.includes('generate_204') || path.includes('gen_204')) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     return res.sendStatus(204);
   }
   
@@ -78,6 +89,17 @@ app.use(express.static('public'));
 // Default route handler for our application
 app.use((req, res) => {
   res.sendFile('index.html', { root: 'public' });
+});
+
+// Explicitly handle common Google connectivity endpoints
+app.get('/generate_204', (req, res) => {
+  console.log('Direct generate_204 request');
+  return res.sendStatus(204);
+});
+
+app.get('/gen_204', (req, res) => {
+  console.log('Direct gen_204 request');
+  return res.sendStatus(204);
 });
 
 // Set up HTTP server
