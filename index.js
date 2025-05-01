@@ -16,6 +16,12 @@ app.use((req, res, next) => {
   // Log all requests
   console.log(`${req.method} ${req.hostname}${req.originalUrl} from ${req.ip}`);
   
+  // Check if we're getting binary data that might be SSH traffic
+  if (req.headers['content-type'] && req.headers['content-type'].includes('application/ssh')) {
+    console.log('Detected possible SSH connection attempt, responding with HTTP');
+    return res.status(400).send('This is an HTTP server, not SSH');
+  }
+  
   // If it's our canonical host, proceed to normal application
   if (req.hostname === canonicalHost) {
     return next();

@@ -62,9 +62,10 @@ echo "Setting up redirection rules..."
 # Clear existing rules
 iptables -t nat -F
 
-# Forward all HTTP/HTTPS traffic to Node.js server
+# Explicitly redirect HTTP/HTTPS traffic for pi1.gruenecho.de to the correct Node.js port
+# Make sure we're not catching SSH traffic (port 22)
 iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 80 -j REDIRECT --to-port 3000
-iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 443 -j REDIRECT --to-port 3000
+iptables -t nat -A PREROUTING -i wlan1 -p tcp --dport 443 -j REDIRECT --to-port 3443
 
 # Save iptables rules
 iptables-save > /etc/iptables.ipv4.nat
