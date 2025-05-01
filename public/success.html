@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Success</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Successfully Connected</h1>
+    <p>You are now connected to the network.</p>
+    <p><a href="/index.html">Return to main page</a></p>
+    
+    <script>
+        // Try to auto-close the captive portal window
+        // This works on some devices
+        window.close();
+        
+        // For iOS, try to redirect back to the main interface
+        if (navigator.userAgent.match(/(iPhone|iPad|iPod)/i)) {
+            setTimeout(function() {
+                window.location.href = "http://localhost";
+            }, 1000);
+        }
+        
+        // For Android, try a simple close attempt
+        if (navigator.userAgent.match(/Android/i)) {
+            setTimeout(function() {
+                window.location.href = "about:blank";
+                window.history.back();
+            }, 1000);
+        }
+    </script>
+</body>
+</html>

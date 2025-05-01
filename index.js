@@ -10,9 +10,10 @@ const canonicalHost = 'pi1.gruenecho.de';
 
 // Configure middleware
 app.use(cors());
+app.use(express.urlencoded({ extended: true })); // For parsing form submissions
 
 // Simple domain-based routing middleware
-/*app.use((req, res, next) => {
+app.use((req, res, next) => {
   // Log all requests
   console.log(`${req.method} ${req.hostname}${req.originalUrl} from ${req.ip}`);
   
@@ -75,10 +76,26 @@ app.use(cors());
     return res.sendStatus(204);
   }
   
-  // For all other requests to non-canonical hosts, return 204 No Content
-  // This prevents "limited internet" notifications
-  return res.sendStatus(204);
-});*/
+  // For all other non-recognized requests, proceed to the app
+  next();
+});
+
+// Handle login endpoint
+app.post('/login', (req, res) => {
+  console.log('Login request received:', req.body);
+  
+  // Always authenticate in this demo
+  // In a real system, you would check credentials here
+  
+  // Set a session cookie to maintain login state
+  res.cookie('authenticated', 'true', { 
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    httpOnly: true
+  });
+  
+  // Redirect to success page
+  res.redirect('/success.html');
+});
 
 // Serve static files for our application
 app.use(express.static('public'));
